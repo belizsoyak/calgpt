@@ -69,9 +69,44 @@ Dev server at http://localhost:5173.
 
 ```
 backend/
-  main.py       — FastAPI app, CORS, /health + /vibe endpoints
+  main.py       — FastAPI app, CORS, /health + /vibe + /pedal endpoints
   agent.py      — Claude call, system prompt, JSON parsing
   fx_engine.py  — pedalboard DSP (stubs if not installed)
+  esp32_bridge.py — flatten a chain + push it to the ESP32 pedal over WiFi
+  mock_pedal.py — local stand-in for the pedal (test the bridge w/o hardware)
+firmware/
+  calgpt_pedal.ino — ESP32 firmware: DSP chain + POST /params WiFi server
 frontend/
   src/          — React app
 ```
+
+## Hardware bridge
+
+Push a generated tone to a physical ESP32 pedal.
+
+### `POST /pedal`
+```json
+// request — esp_ip is host:port, NO http:// prefix
+{ "vibe": "warm 70s blues with slapback delay", "esp_ip": "192.168.1.42:80" }
+
+// response
+{ "chain": { "preset_name": "...", "effects": [ ... ] }, "pushed": true }
+```
+`pushed` is `false` (never an error) if the pedal is unreachable.
+
+### Test it without hardware
+
+```bash
+# terminal 1: backend
+cd backend && uvicorn main:app --reload
+
+# terminal 2: mock pedal
+cd backend && python mock_pedal.py        # http://127.0.0.1:9000
+
+# terminal 3: fire a call, then watch http://127.0.0.1:9000/ update
+curl -X POST http://localhost:8000/pedal -H "Content-Type: application/json" \
+  -d '{"vibe":"warm blues with slapback","esp_ip":"127.0.0.1:9000"}'
+```
+
+The mock pedal prints the flattened params (`od_*`, `vib_*`, `trem_*`, `dl_*`, `rv_mix`)
+to its console and on its dashboard — that's the same payload the real firmware receives.
