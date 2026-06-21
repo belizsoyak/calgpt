@@ -15,6 +15,7 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <math.h>
+#include <string.h>
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -202,7 +203,7 @@ void handle_params() {
   next.dl_mix     = doc["dl_mix"]     | next.dl_mix;
   next.rv_mix     = doc["rv_mix"]     | next.rv_mix;
 
-  g_pending = next;
+  memcpy((void*)&g_pending, &next, sizeof(FxParams));
   g_pending_dirty = true;
 
   server.send(200, "application/json", "{\"ok\":true}");
@@ -243,7 +244,7 @@ void loop() {
 
   if (g_pending_dirty) {
     noInterrupts();
-    g_active = (FxParams)g_pending;
+    memcpy(&g_active, (const void*)&g_pending, sizeof(FxParams));
     g_pending_dirty = false;
     interrupts();
   }

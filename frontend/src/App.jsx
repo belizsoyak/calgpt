@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import * as audioEngine from './audioEngine'
 
-const WS_URL = 'ws://localhost:8000/ws'
-const API = 'http://localhost:8000'
+// Backend location is configurable via env (VITE_API_URL / VITE_WS_URL),
+// defaulting to the standard local backend on port 8000.
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws'
 
 function generateSessionId() {
   return Math.random().toString(36).slice(2)

@@ -4,7 +4,11 @@ import logging
 import os
 import httpx
 import websockets
-from band.config import load_agent_config
+
+try:
+    from band.config import load_agent_config
+except ImportError:  # band SDK is optional — features gated behind BAND_ROOM_ID
+    load_agent_config = None
 
 logger = logging.getLogger(__name__)
 
