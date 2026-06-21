@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import * as audioEngine from './audioEngine'
 
 const WS_URL = 'ws://localhost:8000/ws'
 const API = 'http://localhost:8000'
@@ -16,8 +17,40 @@ export default function App() {
   const [view, setView] = useState('studio')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [live, setLive] = useState(false)
   const wsRef = useRef(null)
   const bottomRef = useRef(null)
+
+  // toggle real-time audio; Tone.start() must run inside this click handler
+  async function toggleLive() {
+    if (audioEngine.isPlaying()) {
+      audioEngine.stop()
+      setLive(false)
+    } else {
+      try {
+        await audioEngine.start()
+        setLive(true)
+        if (contract) audioEngine.applyChain(contract)
+      } catch (err) {
+        console.error('live audio failed:', err)
+      }
+    }
+  }
+
+  async function onPickLoop(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      await audioEngine.loadSource(file)
+    } catch (err) {
+      console.error('loop load failed:', err)
+    }
+  }
+
+  // while live, morph the loop whenever the Studio chain changes
+  useEffect(() => {
+    if (live && contract) audioEngine.applyChain(contract)
+  }, [contract, live])
 
   useEffect(() => {
     const ws = new WebSocket(`${WS_URL}/${sessionId}`)
@@ -73,23 +106,37 @@ export default function App() {
         <h1 className="text-xl font-bold tracking-tight">CalGPT</h1>
         <span className={`w-2 h-2 rounded-full transition-colors ${connected ? 'bg-green-400' : 'bg-zinc-600'}`} />
         <span className="text-xs text-zinc-500">{connected ? 'connected' : 'connecting...'}</span>
-        <div className="ml-auto flex gap-1 text-sm">
-          {['studio', 'performance'].map(v => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`px-3 py-1 rounded-lg font-medium capitalize transition ${
-                view === v ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              {v}
-            </button>
-          ))}
+        <div className="ml-auto flex items-center gap-3 text-sm">
+          <button
+            onClick={toggleLive}
+            className={`px-3 py-1 rounded-lg font-semibold transition ${
+              live ? 'bg-green-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:text-white'
+            }`}
+          >
+            {live ? '■ Stop' : '▶ Live'}
+          </button>
+          <label className="text-xs text-zinc-500 hover:text-white cursor-pointer" title="Load your own guitar loop">
+            load loop
+            <input type="file" accept="audio/*" onChange={onPickLoop} className="hidden" />
+          </label>
+          <div className="flex gap-1">
+            {['studio', 'performance'].map(v => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-3 py-1 rounded-lg font-medium capitalize transition ${
+                  view === v ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
       {view === 'performance' ? (
-        <Performance />
+        <Performance live={live} />
       ) : (
       <div className="flex flex-1 overflow-hidden" style={{ height: 'calc(100vh - 57px)' }}>
 
@@ -166,7 +213,7 @@ function ChatMessage({ msg }) {
   )
 }
 
-function Performance() {
+function Performance({ live }) {
   const [name, setName] = useState('My Set')
   const [espIp, setEspIp] = useState('127.0.0.1:9000')
   const [rows, setRows] = useState([
@@ -179,6 +226,11 @@ function Performance() {
   const [active, setActive] = useState(null)   // { song_name, effects, pushed }
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
+
+  // while live, morph the loop whenever the active song changes (Start/Next/Prev)
+  useEffect(() => {
+    if (live && active) audioEngine.applyChain(active)
+  }, [active, live])
 
   function updateRow(i, key, val) {
     setRows(rows.map((r, idx) => (idx === i ? { ...r, [key]: val } : r)))
