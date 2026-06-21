@@ -1,7 +1,7 @@
 import shutil
 
 try:
-    from pedalboard import Pedalboard, Overdrive, Chorus, Delay, Reverb
+    from pedalboard import Pedalboard, Distortion, Chorus, Delay, Reverb
     from pedalboard.io import AudioFile
     _HAS_PEDALBOARD = True
 except ImportError:
@@ -20,8 +20,9 @@ def apply_chain(input_path: str, contract: dict, output_path: str) -> None:
     for fx in contract.get("effects", []):
         t = fx["type"]
         if t == "overdrive":
-            # pedalboard Overdrive only exposes drive_db; tone/mix are not native params
-            board.append(Overdrive(drive_db=fx["drive"] * 40))
+            # pedalboard's distortion plugin is Distortion (drive_db);
+            # tone/mix have no native params here
+            board.append(Distortion(drive_db=fx["drive"] * 40))
         elif t == "chorus":
             board.append(Chorus(rate_hz=fx["rate_hz"], depth=fx["depth"], mix=fx["mix"]))
         elif t == "delay":
