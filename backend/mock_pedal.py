@@ -16,7 +16,7 @@ Then point /pedal at it (host:port, NO http:// prefix):
 Open http://127.0.0.1:9000/ to watch the pushed params live.
 """
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 PORT = 9000
@@ -76,4 +76,4 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"CalGPT mock pedal listening on http://{HOST}:{PORT}")
-    HTTPServer((HOST, PORT), Handler).serve_forever()
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

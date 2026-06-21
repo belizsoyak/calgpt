@@ -64,3 +64,110 @@ async def pedal(req: PedalRequest):
     chain = await generate_preset(req.vibe)
     pushed = await run_in_threadpool(push_to_pedal, chain, req.esp_ip)
     return {"chain": chain, "pushed": pushed}
+
+
+# --- performance mode (feat/performance-mode) -----------------------------
+# In-memory setlist store. NOTE: resets on server restart — fine for the demo.
+import uuid
+from typing import List
+
+setlists: dict = {}
+
+
+class Song(BaseModel):
+    song_name: str
+    vibe: str
+
+
+class SetlistRequest(BaseModel):
+    name: str
+    esp_ip: str
+    songs: List[Song]
+
+
+@app.post("/setlist")
+async def create_setlist(req: SetlistRequest):
+    try:
+        # Precompute every song's tone NOW so transitions are instant later.
+        songs = []
+        for s in req.songs:
+            chain = await generate_preset(s.vibe)
+            songs.append({"song_name": s.song_name, "vibe": s.vibe, "chain": chain})
+
+        sid = uuid.uuid4().hex[:8]
+        setlist = {
+            "id": sid,
+            "name": req.name,
+            "esp_ip": req.esp_ip,
+            "current": -1,
+            "songs": songs,
+        }
+        setlists[sid] = setlist
+        return setlist
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/setlist/{sid}")
+async def get_setlist(sid: str):
+    try:
+        setlist = setlists.get(sid)
+        if setlist is None:
+            return {"error": "setlist not found"}
+        return setlist
+    except Exception as e:
+        return {"error": str(e)}
+
+
+async def _go_to(sid: str, index: int):
+    """Move to a song index, push its precomputed chain, return the active state."""
+    setlist = setlists.get(sid)
+    if setlist is None:
+        return {"error": "setlist not found"}
+    setlist["current"] = index
+    song = setlist["songs"][index]
+    pushed = await run_in_threadpool(push_to_pedal, song["chain"], setlist["esp_ip"])
+    return {
+        "current": index,
+        "song_name": song["song_name"],
+        "effects": song["chain"].get("effects", []),
+        "pushed": pushed,
+    }
+
+
+@app.post("/setlist/{sid}/start")
+async def start_setlist(sid: str):
+    try:
+        setlist = setlists.get(sid)
+        if setlist is None:
+            return {"error": "setlist not found"}
+        if not setlist["songs"]:
+            return {"error": "setlist is empty"}
+        return await _go_to(sid, 0)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/setlist/{sid}/next")
+async def next_song(sid: str):
+    try:
+        setlist = setlists.get(sid)
+        if setlist is None:
+            return {"error": "setlist not found"}
+        last = len(setlist["songs"]) - 1
+        if setlist["current"] >= last:
+            return {"done": True}
+        return await _go_to(sid, min(setlist["current"] + 1, last))
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/setlist/{sid}/prev")
+async def prev_song(sid: str):
+    try:
+        setlist = setlists.get(sid)
+        if setlist is None:
+            return {"error": "setlist not found"}
+        return await _go_to(sid, max(setlist["current"] - 1, 0))
+    except Exception as e:
+        return {"error": str(e)}
