@@ -31,19 +31,29 @@ floats by position into a `ToneParams`.
 
 Keep `struct ToneParams`'s field names/order aligned to these columns.
 
-## Getting `setlist.csv` onto flash (two options)
+## Getting `setlist.csv` onto flash (two ways, both built in)
 
-1. **Arduino "ESP32 LittleFS Data Upload" plugin** — create a `data/` folder
-   next to the sketch, drop `setlist.csv` in it, and run the upload tool. It
-   writes the folder to the LittleFS partition, so the file appears at
-   `/setlist.csv`.
-2. **Fetch once over WiFi** — on boot, the ESP can `GET` the backend's
-   `/setlist/<id>/export.csv` and write the response body to `/setlist.csv` on
-   LittleFS. (The sketch currently loads from LittleFS in `setup()`; add an
-   HTTP client fetch there first if you want the auto-download path.)
+1. **WiFi fetch from the backend (default).** Set `EXPORT_URL` near the top of
+   the sketch to your backend's export endpoint:
+   ```
+   #define EXPORT_URL "http://<LAPTOP_IP>:8000/setlist/<SETLIST_ID>/export.csv"
+   ```
+   Use the laptop's **LAN IP** (e.g. `192.168.1.42`) — **not** `localhost` /
+   `127.0.0.1`, which the ESP can't reach — and the `SETLIST_ID` returned by
+   `POST /setlist`. `fetchSetlistFromBackend()` does an `HTTPClient` GET and, on
+   `200`, streams the body straight to `/setlist.csv` on LittleFS.
+   - **On boot:** `setup()` calls it right after WiFi connects (before loading).
+   - **On demand:** `POST /reload` to the pedal re-fetches, reloads, and jumps to
+     song 0, responding `{"ok":<bool>,"songs":<count>}`. Handy for updating the
+     setlist without re-flashing.
+2. **Arduino "ESP32 LittleFS Data Upload" plugin (offline fallback).** Create a
+   `data/` folder next to the sketch, drop `setlist.csv` in it, and run the
+   upload tool — it writes the file to the LittleFS partition at `/setlist.csv`.
+   Used automatically if the WiFi fetch is unset/unreachable.
 
-`setup()` already calls `LittleFS.begin(true)` and, if `/setlist.csv` is
-present, `loadSetlistCSV()` + `applySong(0)`.
+`setup()` order: `LittleFS.begin(true)` → `fetchSetlistFromBackend(EXPORT_URL)`
+→ `loadSetlistCSV("/setlist.csv")` → `applySong(0)`. So a flash-uploaded file
+still works even with no backend reachable.
 
 ## Wiring the footswitch
 
