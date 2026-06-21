@@ -28,6 +28,7 @@ export default function App() {
       if (data.type === 'chain_update') {
         setContract(data.contract)
         setMessages(prev => [...prev, { role: 'vibe', text: data.message }])
+        setLoading(false)
       } else if (data.type === 'critic_message') {
         setMessages(prev => [...prev, { role: 'critic', text: data.message }])
       }
@@ -40,31 +41,15 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function sendMessage(e) {
+  function sendMessage(e) {
     e.preventDefault()
     const text = input.trim()
-    if (!text || loading) return
+    if (!text || loading || !connected) return
     setMessages(prev => [...prev, { role: 'user', text }])
     setInput('')
     setLoading(true)
     setError(null)
-    try {
-      const res = await fetch(`${API}/vibe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vibe: text }),
-      })
-      if (!res.ok) throw new Error(`Server error ${res.status}`)
-      // /vibe returns the chain at the TOP LEVEL: { preset_name, effects }
-      const chain = await res.json()
-      setContract(chain)
-      setMessages(prev => [...prev, { role: 'vibe', text: `Dialed in "${chain.preset_name}".` }])
-    } catch (err) {
-      console.error('vibe request failed:', err)
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
+    wsRef.current.send(JSON.stringify({ message: text }))
   }
 
   return (
@@ -132,8 +117,10 @@ export default function App() {
           ) : contract ? (
             <>
               <h2 className="text-lg font-semibold text-violet-400 mb-4">{contract.preset_name}</h2>
-              <div className="flex flex-col gap-3">
-                {contract.effects.map((fx, i) => <EffectCard key={i} fx={fx} />)}
+              <div className="flex flex-col gap-2">
+                {contract.effects.map((fx, i) => (
+                  <Pedal key={i} fx={fx} isLast={i === contract.effects.length - 1} />
+                ))}
               </div>
             </>
           ) : (
@@ -323,8 +310,10 @@ function Performance() {
                 {active.pushed ? '● pushed to pedal' : '○ not pushed'}
               </span>
             </h3>
-            <div className="flex flex-col gap-3 max-w-xl">
-              {active.effects.map((fx, i) => <EffectCard key={i} fx={fx} />)}
+            <div className="flex flex-col gap-2 max-w-xl">
+              {active.effects.map((fx, i) => (
+                <Pedal key={i} fx={fx} isLast={i === active.effects.length - 1} />
+              ))}
             </div>
           </>
         ) : (
@@ -335,28 +324,50 @@ function Performance() {
   )
 }
 
-function EffectCard({ fx }) {
+const PEDAL_THEME = {
+  overdrive: { bg: 'bg-amber-950',   border: 'border-amber-600',   led: 'bg-amber-400',   glow: '#f59e0b', label: 'text-amber-400',   knob: '#f59e0b' },
+  chorus:    { bg: 'bg-blue-950',    border: 'border-blue-500',    led: 'bg-blue-400',    glow: '#60a5fa', label: 'text-blue-400',    knob: '#60a5fa' },
+  delay:     { bg: 'bg-emerald-950', border: 'border-emerald-600', led: 'bg-emerald-400', glow: '#34d399', label: 'text-emerald-400', knob: '#34d399' },
+  reverb:    { bg: 'bg-violet-950',  border: 'border-violet-600',  led: 'bg-violet-400',  glow: '#a78bfa', label: 'text-violet-400',  knob: '#a78bfa' },
+}
+
+function Pedal({ fx, isLast }) {
   const { type, ...params } = fx
+  const t = PEDAL_THEME[type] || PEDAL_THEME.reverb
   return (
-    <div className="bg-zinc-800 rounded-lg px-4 py-3">
-      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest mb-3">{type}</p>
-      <div className="flex flex-wrap gap-4">
-        {Object.entries(params).map(([k, v]) => <Knob key={k} label={k} value={v} />)}
+    <div className="flex items-stretch gap-0">
+      <div className={`flex-1 ${t.bg} border ${t.border} rounded-xl p-4 relative`}>
+        {/* LED */}
+        <div
+          className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${t.led}`}
+          style={{ boxShadow: `0 0 7px 2px ${t.glow}` }}
+        />
+        <p className={`text-xs font-bold uppercase tracking-widest mb-4 ${t.label}`}>{type}</p>
+        <div className="flex flex-wrap gap-5">
+          {Object.entries(params).map(([k, v]) => <Knob key={k} label={k} value={v} color={t.knob} />)}
+        </div>
+        {/* footswitch */}
+        <div className="mt-4 flex justify-center">
+          <div className="w-8 h-4 rounded-full bg-zinc-700 border border-zinc-600" />
+        </div>
       </div>
+      {!isLast && (
+        <div className="flex items-center px-1 text-zinc-600 text-xs select-none">→</div>
+      )}
     </div>
   )
 }
 
-function Knob({ label, value }) {
+function Knob({ label, value, color }) {
   const pct = label === 'rate_hz' ? (value / 5) * 100
             : label === 'time_ms' ? (value / 2000) * 100
             : value * 100
   return (
-    <div className="flex flex-col items-center gap-1 min-w-[56px]">
-      <div className="w-10 h-10 rounded-full bg-zinc-700 flex items-center justify-center relative">
+    <div className="flex flex-col items-center gap-1 min-w-[52px]">
+      <div className="w-10 h-10 rounded-full bg-zinc-800 border border-zinc-600 flex items-center justify-center relative">
         <div
-          className="w-1 h-4 bg-violet-400 rounded absolute bottom-1/2 origin-bottom"
-          style={{ transform: `rotate(${-140 + pct * 2.8}deg)` }}
+          className="w-1 h-4 rounded absolute bottom-1/2 origin-bottom"
+          style={{ transform: `rotate(${-140 + pct * 2.8}deg)`, backgroundColor: color }}
         />
       </div>
       <span className="text-xs text-zinc-500">{label}</span>

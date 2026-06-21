@@ -6,6 +6,8 @@ from agent import generate_preset
 from session import SessionManager
 from vibe_agent import run_vibe_agent
 from critic_agent import run_critic_agent
+from research_agent import lookup_artist
+from memory_agent import update_memory
 
 app = FastAPI(title="CalGPT")
 sessions = SessionManager()
@@ -29,6 +31,9 @@ def health():
 
 @app.post("/vibe")
 async def vibe(req: VibeRequest):
+    hit = lookup_artist(req.vibe)
+    if hit:
+        return hit
     return await generate_preset(req.vibe)
 
 
@@ -41,10 +46,27 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             message = data.get("message", "").strip()
             if not message:
                 continue
+
+            # Research agent: instant preset for known artists
+            hit = lookup_artist(message)
+            if hit:
+                await sessions.send(session_id, {
+                    "type": "chain_update",
+                    "agent": "vibe",
+                    "message": f"Loaded {hit['preset_name']}.",
+                    "contract": hit,
+                })
+                asyncio.create_task(run_critic_agent(session_id, hit, sessions))
+                continue
+
+            # Inject memory context from prior turns
+            memory = sessions.get_memory(session_id)
+            if memory:
+                message = f"{message} [tone profile: {memory}]"
+
             result = await run_vibe_agent(session_id, message, sessions)
-            asyncio.create_task(
-                run_critic_agent(session_id, result["contract"], sessions)
-            )
+            asyncio.create_task(run_critic_agent(session_id, result["contract"], sessions))
+            asyncio.create_task(update_memory(session_id, sessions))
     except WebSocketDisconnect:
         sessions.disconnect(session_id)
 

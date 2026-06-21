@@ -4,6 +4,7 @@ backend/.venv/
 backend/__pycache__/
 **/*.pyc
 backend/.env
+backend/agent_config.yaml
 
 # Node
 node_modules/
