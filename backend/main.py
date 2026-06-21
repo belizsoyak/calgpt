@@ -195,6 +195,44 @@ async def prev_song(sid: str):
         return {"error": str(e)}
 
 
+# --- setlist CSV export (feat/setlist-csv) ---------------------------------
+# Shared contract with the ESP32 firmware: these 13 columns IN THIS EXACT ORDER.
+# Both sides parse by position, so the order must match the export exactly.
+import csv
+import io
+from fastapi import HTTPException
+from esp32_bridge import chain_to_flat
+
+FLAT_COLUMNS = [
+    "od_drive", "od_tone", "od_mix",
+    "vib_rate", "vib_depth", "vib_mix",
+    "trem_rate", "trem_depth", "trem_mix",
+    "dl_time_ms", "dl_feedback", "dl_mix",
+    "rv_mix",
+]
+
+
+@app.get("/setlist/{sid}/export.csv")
+def export_setlist_csv(sid: str):
+    setlist = setlists.get(sid)
+    if setlist is None:
+        raise HTTPException(status_code=404, detail="setlist not found")
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["song"] + FLAT_COLUMNS)
+    for song in setlist["songs"]:
+        flat = chain_to_flat(song["chain"])
+        writer.writerow([song["song_name"]] + [flat.get(col, 0.0) for col in FLAT_COLUMNS])
+
+    filename = f"setlist_{sid}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # --- audio preview (feat/preview-audio) -----------------------------------
 # Render a chain over a synthesized guitar sample and return the processed WAV.
 # No audio asset needed (sample is generated in-code) and no new dependency
