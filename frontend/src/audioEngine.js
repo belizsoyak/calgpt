@@ -22,6 +22,7 @@ let running = false
 let source = 'file'      // 'file' | 'guitar'
 let lastSize = null      // reverb.decay regenerates the IR (async); only set on change
 let objectUrl = null     // last URL.createObjectURL, for cleanup
+let selectedDeviceId     // chosen input device for guitar mode (undefined = default)
 
 function clamp01(v) {
   v = Number(v)
@@ -62,7 +63,7 @@ function disconnectSources() {
 // Connect + start whichever source is currently selected.
 async function startSource() {
   if (source === 'guitar') {
-    await userMedia.open()            // prompts for input-device permission
+    await userMedia.open(selectedDeviceId)  // prompts for input-device permission
     userMedia.connect(distortion)
   } else {
     await Tone.loaded()               // wait for the sample buffer
@@ -92,6 +93,30 @@ export function isPlaying() {
 
 export function getSource() {
   return source
+}
+
+// List available audio input devices. Labels are only populated once the user
+// has granted input permission (i.e. after a guitar-mode start).
+export async function listInputDevices() {
+  try {
+    const devices = await Tone.UserMedia.enumerateDevices()
+    return devices
+      .filter(d => d.kind === 'audioinput')
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `Input ${i + 1}` }))
+  } catch {
+    return []
+  }
+}
+
+// Pick the input device for guitar mode. Re-opens live if currently on guitar.
+export async function setInputDevice(id) {
+  selectedDeviceId = id || undefined
+  if (running && source === 'guitar') {
+    if (userMedia.state === 'started') userMedia.close()
+    try { userMedia.disconnect(distortion) } catch { /* not connected */ }
+    await userMedia.open(selectedDeviceId)
+    userMedia.connect(distortion)
+  }
 }
 
 // Switch between 'file' and 'guitar'. If currently running, swaps the live
