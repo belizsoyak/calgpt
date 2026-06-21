@@ -113,7 +113,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             # Also fire-and-forget to Band room for agent-to-agent communication
             if os.getenv("BAND_ROOM_ID", "").strip():
-                asyncio.create_task(send_to_room(message, mention="@VibeAgent"))
+                asyncio.create_task(send_to_room(message))
     except WebSocketDisconnect:
         sessions.disconnect(session_id)
 
