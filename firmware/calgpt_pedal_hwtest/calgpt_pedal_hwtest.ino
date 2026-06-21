@@ -16,7 +16,9 @@
 //
 // Effect order: overdrive → vibrato → tremolo → delay → reverb
 
+#include <WiFi.h>
 #include <math.h>
+#include <WiFi.h>
 
 // ---------------------------------------------------------------------------
 // Pin config
@@ -30,7 +32,7 @@
 // ---------------------------------------------------------------------------
 #define SAMPLE_RATE   8000    // Hz
 #define BUFFER_FRAMES 256
-#define DELAY_MAX_MS  100     // only reverb pre-delay (~50ms) needed; delay+vibrato are off
+#define DELAY_MAX_MS  600     // enough for 500ms delay + reverb pre-delay
 
 // Microseconds per sample
 #define US_PER_SAMPLE (1000000 / SAMPLE_RATE)
@@ -48,13 +50,13 @@ struct FxParams {
 
 static const FxParams g_params = {
   // overdrive: drive, tone, mix
-  0.9f, 0.8f, 1.0f,
+  1.0f, 0.8f, 1.0f,
   // vibrato:   rate(Hz), depth, mix
   0.0f, 0.0f, 0.0f,
   // tremolo:   rate(Hz), depth, mix
   0.0f, 0.0f, 0.0f,
   // delay:     time_ms, feedback, mix
-  0.0f, 0.0f, 0.0f,
+  500.0f, 0.75f, 0.8f,
   // reverb:    mix
   0.6f
 };
@@ -166,53 +168,66 @@ void setup() {
   Serial.println("CalGPT HW test — ADC(A2) → DSP → DAC(A1)");
   Serial.printf("Sample rate: %d Hz | Drive: %.1f | Reverb: %.1f\n",
                 SAMPLE_RATE, g_params.od_drive, g_params.rv_mix);
+  WiFi.mode(WIFI_STA);
+  Serial.println(WiFi.macAddress());
 }
 
 // ---------------------------------------------------------------------------
-// Loop — micros()-paced sample collection, ping-pong buffer processing
-//
-// Input signal assumed biased to Vcc/2 (~1.65V = ADC 2048).
-// DSP operates at ±2^31 scale. DAC output biased back to 128/255.
+// Loop — delayMicroseconds-paced sample collection, ping-pong buffer.
+// Collects one full buffer at SAMPLE_RATE, processes it, outputs the
+// previous processed buffer simultaneously, then repeats.
 // One buffer of latency (~32 ms at 8kHz/256 frames).
 // ---------------------------------------------------------------------------
 void loop() {
   static int32_t in_buf[BUFFER_FRAMES];
   static int32_t out_buf[BUFFER_FRAMES];
-  static int     in_idx     = 0;
-  static int     out_idx    = 0;
-  static bool    out_ready  = false;
-  static uint32_t next_us   = 0;
+  static bool    out_ready = false;
 
-  uint32_t now = micros();
-  if (now < next_us) return;
-  next_us += US_PER_SAMPLE;
+  digitalWrite(PIN_LED, HIGH);
 
-  // --- ADC read: 12-bit (0–4095), center at 2048, scale to int32 range ---
-  int raw = analogRead(PIN_ADC);
-  in_buf[in_idx++] = (int32_t)(raw - 2048) << 20;
+  // Collect input + drain output at SAMPLE_RATE
+  for (int i = 0; i < BUFFER_FRAMES; i++) {
+    // --- ADC: 2x oversample to reduce noise ---
+    int raw = (analogRead(PIN_ADC) + analogRead(PIN_ADC)) >> 1;
 
-  // --- DAC output: drain previous processed buffer ---
-  if (out_ready) {
-    int32_t s = out_buf[out_idx++] >> 20;  // scale back to ±2047
-    s += 2048;                             // re-bias to 0–4095
-    s >>= 4;                               // scale to 0–255 for 8-bit DAC
-    if (s < 0)   s = 0;
-    if (s > 255) s = 255;
-    dacWrite(PIN_DAC, (uint8_t)s);
-    if (out_idx >= BUFFER_FRAMES) out_ready = false;
+    // --- DC removal: slow IIR tracks the half-wave average ---
+    static float dc_avg = 0.0f;
+    static bool  dc_ready = false;
+    if (!dc_ready) { dc_avg = (float)raw; dc_ready = true; }
+    dc_avg += 0.0002f * ((float)raw - dc_avg);  // ~0.6 s convergence at 8kHz
+    float signal = ((float)raw - dc_avg) * 2.0f;
+
+    // --- Full-wave reconstruction: mirror positive half into negative ---
+    // After DC removal, the clipped negative half appears as signal < 0.
+    // Replace it with the negated previous positive sample so the waveform
+    // is symmetric — far better than a flat bottom.
+    static float prev_pos = 0.0f;
+    if (signal >= 0.0f) {
+      prev_pos = signal;
+    } else {
+      signal = -prev_pos * 0.98f;  // slight decay keeps it natural
+    }
+    in_buf[i] = (int32_t)signal << 20;
+
+    // --- DAC: output previous processed buffer with IIR smoothing ---
+    // Smoothing reduces the audible stepping of the 8-bit DAC.
+    if (out_ready) {
+      static float smooth = 128.0f;
+      float target = (float)(out_buf[i] >> 20) + 2048.0f;  // ±2047 → 0–4095
+      target /= 16.0f;                                       // → 0–255
+      if (target < 0.0f)   target = 0.0f;
+      if (target > 255.0f) target = 255.0f;
+      smooth += 0.5f * (target - smooth);  // ~2 kHz low-pass at 8kHz
+      dacWrite(PIN_DAC, (uint8_t)(int)smooth);
+    }
+
+    delayMicroseconds(US_PER_SAMPLE - 30);  // -30 µs to account for two analogReads
   }
 
-  // --- When input buffer full: process it into output buffer ---
-  if (in_idx >= BUFFER_FRAMES) {
-    digitalWrite(PIN_LED, HIGH);
+  // Process input into output buffer
+  memcpy(out_buf, in_buf, sizeof(in_buf));
+  process_buffer(out_buf, BUFFER_FRAMES, g_params);
+  out_ready = true;
 
-    memcpy(out_buf, in_buf, sizeof(in_buf));
-    process_buffer(out_buf, BUFFER_FRAMES, g_params);
-
-    in_idx    = 0;
-    out_idx   = 0;
-    out_ready = true;
-
-    digitalWrite(PIN_LED, LOW);
-  }
+  digitalWrite(PIN_LED, LOW);
 }
