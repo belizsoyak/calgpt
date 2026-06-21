@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import * as audioEngine from './audioEngine'
 
 const WS_URL = 'ws://localhost:8000/ws'
 const API = 'http://localhost:8000'
@@ -8,6 +9,7 @@ function generateSessionId() {
 }
 
 export default function App() {
+  const [user, setUser] = useState(() => localStorage.getItem('calgpt_user') || '')
   const [sessionId] = useState(generateSessionId)
   const [messages, setMessages] = useState([])
   const [contract, setContract] = useState(null)
@@ -16,8 +18,79 @@ export default function App() {
   const [view, setView] = useState('studio')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [live, setLive] = useState(false)
+  const [source, setSource] = useState('file')   // 'file' | 'guitar'
+  const [devices, setDevices] = useState([])
+  const [deviceId, setDeviceId] = useState('')
+  const [audioError, setAudioError] = useState(null)
   const wsRef = useRef(null)
   const bottomRef = useRef(null)
+
+  function signOut() {
+    if (audioEngine.isPlaying()) { audioEngine.stop(); setLive(false) }
+    localStorage.removeItem('calgpt_user')
+    setUser('')
+  }
+
+  async function changeSource(mode) {
+    setSource(mode)
+    setAudioError(null)
+    try {
+      await audioEngine.setSource(mode)   // seamless swap if already live
+      if (mode === 'guitar') setDevices(await audioEngine.listInputDevices())
+    } catch (err) {
+      console.error('source switch failed:', err)
+      setAudioError('Could not access input device')
+    }
+  }
+
+  function changeDevice(id) {
+    setDeviceId(id)
+    audioEngine.setInputDevice(id).catch(err => {
+      console.error('device switch failed:', err)
+      setAudioError('Could not switch input device')
+    })
+  }
+
+  // toggle real-time audio; Tone.start() must run inside this click handler
+  async function toggleLive() {
+    if (audioEngine.isPlaying()) {
+      audioEngine.stop()
+      setLive(false)
+    } else {
+      setAudioError(null)
+      try {
+        await audioEngine.start()
+        setLive(true)
+        if (contract) audioEngine.applyChain(contract)
+        // device labels are available now that permission was granted
+        if (source === 'guitar') setDevices(await audioEngine.listInputDevices())
+      } catch (err) {
+        console.error('live audio failed:', err)
+        setAudioError(source === 'guitar' ? 'Microphone/input permission denied' : 'Could not start audio')
+      }
+    }
+  }
+
+  async function onPickLoop(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      await audioEngine.loadSource(file)
+    } catch (err) {
+      console.error('loop load failed:', err)
+    }
+  }
+
+  // populate the device list when entering guitar mode
+  useEffect(() => {
+    if (source === 'guitar') audioEngine.listInputDevices().then(setDevices).catch(() => {})
+  }, [source])
+
+  // while live, morph the loop whenever the Studio chain changes
+  useEffect(() => {
+    if (live && contract) audioEngine.applyChain(contract)
+  }, [contract, live])
 
   useEffect(() => {
     const ws = new WebSocket(`${WS_URL}/${sessionId}`)
@@ -67,31 +140,96 @@ export default function App() {
     }
   }
 
+  if (!user) {
+    return <SignIn onSignIn={name => { localStorage.setItem('calgpt_user', name); setUser(name) }} />
+  }
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col">
-      <header className="border-b border-zinc-800 px-6 py-4 flex items-center gap-3">
-        <h1 className="text-xl font-bold tracking-tight">CalGPT</h1>
-        <span className={`w-2 h-2 rounded-full transition-colors ${connected ? 'bg-green-400' : 'bg-zinc-600'}`} />
-        <span className="text-xs text-zinc-500">{connected ? 'connected' : 'connecting...'}</span>
-        <div className="ml-auto flex gap-1 text-sm">
-          {['studio', 'performance'].map(v => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`px-3 py-1 rounded-lg font-medium capitalize transition ${
-                view === v ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              {v}
-            </button>
-          ))}
+    <div className="h-screen bg-zinc-950 text-white flex flex-col overflow-hidden">
+      {/* Top bar */}
+      <header className="border-b border-zinc-800 px-6 py-3 flex items-center gap-4">
+        <div className="flex items-center gap-2.5">
+          <span className="text-2xl">🎸</span>
+          <div className="leading-none">
+            <h1 className="text-lg font-bold tracking-tight">CalGPT</h1>
+            <p className="text-[11px] text-zinc-500 mt-0.5">AI guitar tone studio</p>
+          </div>
+          <span className={`ml-2 w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-zinc-600'}`}
+            title={connected ? 'agent connected' : 'connecting...'} />
+        </div>
+
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-0.5">
+            {['studio', 'performance'].map(v => (
+              <button key={v} onClick={() => setView(v)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium capitalize transition ${
+                  view === v ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+                }`}>
+                {v}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 pl-3 border-l border-zinc-800">
+            <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold uppercase">
+              {user[0] || '?'}
+            </div>
+            <span className="text-sm text-zinc-300 hidden sm:block">{user}</span>
+            <button onClick={signOut} className="text-xs text-zinc-500 hover:text-white transition">Sign out</button>
+          </div>
         </div>
       </header>
 
+      {/* Live-audio control strip */}
+      <div className="border-b border-zinc-800 bg-zinc-900/40 px-6 py-2.5 flex items-center gap-3 flex-wrap text-sm">
+        <button onClick={toggleLive}
+          className={`px-4 py-1.5 rounded-lg font-semibold transition ${
+            live ? 'bg-green-600 text-white' : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
+          }`}>
+          {live ? '■ Stop' : '▶ Live'}
+        </button>
+        {live && (
+          <span className="flex items-center gap-1.5 text-xs text-green-400">
+            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />live · {source}
+          </span>
+        )}
+
+        <span className="text-zinc-700">|</span>
+        <span className="text-xs text-zinc-500">Source</span>
+        <div className="flex gap-1 bg-zinc-800 rounded-lg p-0.5">
+          {[['file', 'File'], ['guitar', 'Guitar']].map(([mode, label]) => (
+            <button key={mode} onClick={() => changeSource(mode)}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+                source === mode ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {source === 'file' ? (
+          <label className="text-xs text-zinc-400 hover:text-white cursor-pointer underline decoration-dotted underline-offset-2" title="Load your own guitar loop">
+            load loop
+            <input type="file" accept="audio/*" onChange={onPickLoop} className="hidden" />
+          </label>
+        ) : (
+          <>
+            <select value={deviceId} onChange={e => changeDevice(e.target.value)}
+              className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-500 max-w-[220px]">
+              <option value="">Default input</option>
+              {devices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+            </select>
+            <span className="text-xs text-amber-500/80" title="Speakers + mic will feed back">🎧 use headphones</span>
+          </>
+        )}
+        {audioError && <span className="text-xs text-red-400">{audioError}</span>}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-h-0 flex flex-col">
       {view === 'performance' ? (
-        <Performance />
+        <Performance live={live} />
       ) : (
-      <div className="flex flex-1 overflow-hidden" style={{ height: 'calc(100vh - 57px)' }}>
+      <div className="flex flex-1 overflow-hidden">
 
         {/* Chat panel */}
         <div className="flex flex-col w-1/2 border-r border-zinc-800">
@@ -144,6 +282,7 @@ export default function App() {
         </div>
       </div>
       )}
+      </div>
     </div>
   )
 }
@@ -166,7 +305,7 @@ function ChatMessage({ msg }) {
   )
 }
 
-function Performance() {
+function Performance({ live }) {
   const [name, setName] = useState('My Set')
   const [espIp, setEspIp] = useState('127.0.0.1:9000')
   const [rows, setRows] = useState([
@@ -179,6 +318,11 @@ function Performance() {
   const [active, setActive] = useState(null)   // { song_name, effects, pushed }
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
+
+  // while live, morph the loop whenever the active song changes (Start/Next/Prev)
+  useEffect(() => {
+    if (live && active) audioEngine.applyChain(active)
+  }, [active, live])
 
   function updateRow(i, key, val) {
     setRows(rows.map((r, idx) => (idx === i ? { ...r, [key]: val } : r)))
@@ -282,7 +426,7 @@ function Performance() {
 
   // --- performance view (setlist built) ---
   return (
-    <div className="flex flex-1 overflow-hidden" style={{ height: 'calc(100vh - 57px)' }}>
+    <div className="flex flex-1 overflow-hidden">
       {/* Song list */}
       <div className="w-1/3 border-r border-zinc-800 overflow-y-auto p-4">
         <div className="flex items-center justify-between mb-3">
@@ -363,6 +507,44 @@ function Knob({ label, value }) {
       <span className="text-xs text-zinc-300 font-mono">
         {typeof value === 'number' ? value.toFixed(2) : value}
       </span>
+    </div>
+  )
+}
+
+function SignIn({ onSignIn }) {
+  const [name, setName] = useState('')
+
+  function submit(e) {
+    e.preventDefault()
+    const n = name.trim()
+    if (n) onSignIn(n)
+  }
+
+  return (
+    <div className="h-screen bg-zinc-950 text-white flex items-center justify-center px-4">
+      <div className="w-full max-w-sm text-center">
+        <div className="text-5xl mb-4">🎸</div>
+        <h1 className="text-3xl font-bold tracking-tight mb-1">CalGPT</h1>
+        <p className="text-zinc-500 mb-8">Describe a tone in plain words — hear it live, build a setlist, send it to your pedal.</p>
+
+        <form onSubmit={submit} className="flex flex-col gap-3">
+          <input
+            autoFocus
+            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-center text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition"
+            placeholder="Your name"
+            value={name}
+            onChange={e => setName(e.target.value)}
+          />
+          <button
+            type="submit"
+            disabled={!name.trim()}
+            className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-3 rounded-lg font-semibold transition"
+          >
+            Enter the studio
+          </button>
+        </form>
+        <p className="text-[11px] text-zinc-600 mt-4">Saved locally on this device. No password needed.</p>
+      </div>
     </div>
   )
 }
