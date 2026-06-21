@@ -11,31 +11,58 @@ logger = logging.getLogger(__name__)
 BAND_REST = "https://app.band.ai/api/v1/agent"
 BAND_WS   = "wss://app.band.ai/api/v1/socket/websocket"
 
-AGENT_NAMES = {"VibeAgent", "CriticAgent", "ResearchAgent", "MemoryAgent", "FeedbackAgent"}
 
-def _vibe_key() -> str:
+def _vibe_creds() -> tuple[str, str]:
     try:
-        _, key = load_agent_config("vibe_agent")
-        return key
+        agent_id, key = load_agent_config("vibe_agent")
+        return agent_id, key
     except Exception:
-        return os.getenv("BAND_VIBE_API_KEY", "")
+        return "", os.getenv("BAND_VIBE_API_KEY", "")
 
 
-async def send_to_room(message: str, mention: str = "@VibeAgent"):
+def _research_creds() -> tuple[str, str]:
+    try:
+        agent_id, key = load_agent_config("research_agent")
+        return agent_id, key
+    except Exception:
+        return "", ""
+
+
+async def send_to_room(message: str):
+    """Post a message to the Band room as the vibe_agent, mentioning research_agent to kick off the chain."""
     room_id = os.getenv("BAND_ROOM_ID", "").strip()
     if not room_id:
         logger.warning("BAND_ROOM_ID not set — skipping Band send")
         return None
+
+    vibe_id, vibe_key = _vibe_creds()
+    research_id, _ = _research_creds()
+
+    if not research_id:
+        logger.warning("research_agent ID not found — skipping Band send")
+        return None
+
+    body = {
+        "message": {
+            "content": f"@research_agent {message}",
+            "mentions": [
+                {
+                    "id": research_id,
+                    "handle": "belizsoyak/research-agent",
+                    "name": "research_agent",
+                }
+            ],
+        }
+    }
+
     async with httpx.AsyncClient() as client:
         res = await client.post(
             f"{BAND_REST}/chats/{room_id}/messages",
-            headers={
-                "Authorization": f"Bearer {_vibe_key()}",
-                "Content-Type": "application/json",
-            },
-            json={"content": f"{mention} {message}"},
+            headers={"X-API-Key": vibe_key, "Content-Type": "application/json"},
+            json=body,
             timeout=10,
         )
+        logger.info(f"Band send response: {res.status_code} {res.text[:200]}")
         return res.json()
 
 
@@ -65,14 +92,15 @@ async def listen_for_responses(room_id: str, on_message):
                         payload = data[4] if len(data) > 4 else {}
 
                         if event == "message_created":
-                            msg    = payload.get("message", {})
-                            sender = msg.get("sender", {}).get("name", "")
-                            content = msg.get("content", "")
-                            if sender in AGENT_NAMES:
+                            # Payload is flat — fields are directly at root level
+                            sender_name = payload.get("sender_name") or ""
+                            sender_type = payload.get("sender_type", "")
+                            content     = payload.get("content", "")
+                            if content and sender_type == "agent":
                                 await on_message({
-                                    "agent":   sender,
+                                    "agent":   sender_name,
                                     "content": content,
-                                    "timestamp": msg.get("created_at"),
+                                    "timestamp": payload.get("inserted_at"),
                                 })
                     except Exception as e:
                         logger.error(f"Band message parse error: {e}")
