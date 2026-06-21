@@ -45,7 +45,8 @@ critic_agent    memory_agent
 
 | Layer | Tech |
 |---|---|
-| Agent communication | [Band](https://app.band.ai) | Band Room: https://app.band.ai/chat/a6f18fd6-e45c-4f10-81d0-ab23fa52e646
+| Agent communication | [Band](https://app.band.ai) |  
+| Band Room | https://app.band.ai/chat/a6f18fd6-e45c-4f10-81d0-ab23fa52e646 |
 | AI | Anthropic `claude-sonnet-4-6` |
 | Backend | Python FastAPI + WebSocket |
 | DSP / preview | Spotify `pedalboard` |
