@@ -145,13 +145,13 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 text-white flex flex-col overflow-hidden">
+    <div className="h-screen text-white flex flex-col overflow-hidden">
       {/* Top bar */}
-      <header className="border-b border-zinc-800 px-6 py-3 flex items-center gap-4">
+      <header className="border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-md px-6 py-3 flex items-center gap-4">
         <div className="flex items-center gap-2.5">
-          <span className="text-2xl">🎸</span>
+          <span className="text-2xl drop-shadow-[0_0_8px_rgba(139,92,246,0.5)]">🎸</span>
           <div className="leading-none">
-            <h1 className="text-lg font-bold tracking-tight">CalGPT</h1>
+            <h1 className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-violet-300 via-fuchsia-300 to-violet-400 bg-clip-text text-transparent">CalGPT</h1>
             <p className="text-[11px] text-zinc-500 mt-0.5">AI guitar tone studio</p>
           </div>
           <span className={`ml-2 w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-zinc-600'}`}
@@ -180,7 +180,7 @@ export default function App() {
       </header>
 
       {/* Live-audio control strip */}
-      <div className="border-b border-zinc-800 bg-zinc-900/40 px-6 py-2.5 flex items-center gap-3 flex-wrap text-sm">
+      <div className="border-b border-zinc-800/80 bg-zinc-900/30 backdrop-blur px-6 py-2.5 flex items-center gap-3 flex-wrap text-sm">
         <button onClick={toggleLive}
           className={`px-4 py-1.5 rounded-lg font-semibold transition ${
             live ? 'bg-green-600 text-white' : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
@@ -254,7 +254,7 @@ export default function App() {
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2 rounded-lg font-semibold text-sm transition"
+              className="bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 shadow-lg shadow-violet-900/30 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2 rounded-lg font-semibold text-sm transition"
             >
               {loading ? '...' : 'Send'}
             </button>
@@ -460,7 +460,7 @@ function Performance({ live }) {
             <button type="button" onClick={addRow}
               className="text-sm text-zinc-400 hover:text-white px-3 py-2">+ Add song</button>
             <button type="submit" disabled={busy}
-              className="ml-auto bg-violet-600 hover:bg-violet-500 disabled:opacity-40 px-5 py-2 rounded-lg font-semibold text-sm transition">
+              className="ml-auto bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 shadow-lg shadow-violet-900/30 disabled:opacity-40 px-5 py-2 rounded-lg font-semibold text-sm transition">
               {busy ? 'Building...' : 'Build setlist'}
             </button>
           </div>
@@ -526,7 +526,7 @@ function Performance({ live }) {
                 {active.pushed ? '● pushed to pedal' : '○ not pushed'}
               </span>
               <button onClick={() => playChain(setlist.songs[current].chain)} disabled={previewing}
-                className="ml-auto bg-violet-600 hover:bg-violet-500 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold transition">
+                className="ml-auto bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 shadow-lg shadow-violet-900/30 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold transition">
                 {previewing ? 'Loading...' : '▶ Hear it'}
               </button>
             </h3>
@@ -542,11 +542,24 @@ function Performance({ live }) {
   )
 }
 
+const FX_META = {
+  overdrive: { icon: '🔥', dot: 'bg-amber-400',   text: 'text-amber-300' },
+  chorus:    { icon: '🌊', dot: 'bg-sky-400',     text: 'text-sky-300' },
+  delay:     { icon: '🔁', dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  reverb:    { icon: '✨', dot: 'bg-fuchsia-400', text: 'text-fuchsia-300' },
+}
+
 function EffectCard({ fx }) {
   const { type, ...params } = fx
+  const meta = FX_META[type] || { icon: '🎛️', dot: 'bg-zinc-400', text: 'text-zinc-300' }
   return (
-    <div className="bg-zinc-800 rounded-lg px-4 py-3">
-      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest mb-3">{type}</p>
+    <div className="rounded-xl px-4 py-3 bg-zinc-900/70 border border-zinc-800 hover:border-zinc-700 ring-1 ring-white/5 shadow-lg shadow-black/20 transition animate-fadein">
+      <div className="flex items-center gap-2 mb-3">
+        <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
+        <span className={`text-xs font-semibold uppercase tracking-widest ${meta.text}`}>
+          {meta.icon} {type}
+        </span>
+      </div>
       <div className="flex flex-wrap gap-4">
         {Object.entries(params).map(([k, v]) => <Knob key={k} label={k} value={v} />)}
       </div>
@@ -555,19 +568,27 @@ function EffectCard({ fx }) {
 }
 
 function Knob({ label, value }) {
-  const pct = label === 'rate_hz' ? (value / 5) * 100
-            : label === 'time_ms' ? (value / 2000) * 100
-            : value * 100
+  const pct = Math.max(0, Math.min(100,
+    label === 'rate_hz' ? (value / 5) * 100
+    : label === 'time_ms' ? (value / 2000) * 100
+    : value * 100
+  ))
+  const deg = (pct / 100) * 360
   return (
-    <div className="flex flex-col items-center gap-1 min-w-[56px]">
-      <div className="w-10 h-10 rounded-full bg-zinc-700 flex items-center justify-center relative">
-        <div
-          className="w-1 h-4 bg-violet-400 rounded absolute bottom-1/2 origin-bottom"
-          style={{ transform: `rotate(${-140 + pct * 2.8}deg)` }}
-        />
+    <div className="flex flex-col items-center gap-1.5 min-w-[60px]">
+      <div
+        className="w-12 h-12 rounded-full p-[3px] shadow-inner"
+        style={{ background: `conic-gradient(#a78bfa ${deg}deg, #27272a ${deg}deg)` }}
+      >
+        <div className="w-full h-full rounded-full bg-zinc-900 flex items-center justify-center relative">
+          <div
+            className="w-1 h-3.5 bg-violet-300 rounded absolute bottom-1/2 origin-bottom"
+            style={{ transform: `rotate(${-140 + pct * 2.8}deg)` }}
+          />
+        </div>
       </div>
-      <span className="text-xs text-zinc-500">{label}</span>
-      <span className="text-xs text-zinc-300 font-mono">
+      <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{label}</span>
+      <span className="text-xs text-zinc-200 font-mono">
         {typeof value === 'number' ? value.toFixed(2) : value}
       </span>
     </div>
@@ -584,16 +605,20 @@ function SignIn({ onSignIn }) {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 text-white flex items-center justify-center px-4">
-      <div className="w-full max-w-sm text-center">
-        <div className="text-5xl mb-4">🎸</div>
-        <h1 className="text-3xl font-bold tracking-tight mb-1">CalGPT</h1>
-        <p className="text-zinc-500 mb-8">Describe a tone in plain words — hear it live, build a setlist, send it to your pedal.</p>
+    <div className="h-screen text-white flex items-center justify-center px-4">
+      <div className="w-full max-w-sm text-center animate-fadein">
+        <div className="text-6xl mb-5 drop-shadow-[0_0_25px_rgba(168,85,247,0.6)]">🎸</div>
+        <h1 className="text-4xl font-extrabold tracking-tight mb-2 bg-gradient-to-r from-violet-300 via-fuchsia-300 to-violet-400 bg-clip-text text-transparent">
+          CalGPT
+        </h1>
+        <p className="text-zinc-400 mb-8 leading-relaxed">
+          Describe a tone in plain words — hear it live, build a setlist, send it to your pedal.
+        </p>
 
-        <form onSubmit={submit} className="flex flex-col gap-3">
+        <form onSubmit={submit} className="flex flex-col gap-3 bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 backdrop-blur shadow-xl shadow-black/30">
           <input
             autoFocus
-            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-center text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition"
+            className="bg-zinc-950/60 border border-zinc-700 rounded-xl px-4 py-3 text-center text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/30 transition"
             placeholder="Your name"
             value={name}
             onChange={e => setName(e.target.value)}
@@ -601,9 +626,9 @@ function SignIn({ onSignIn }) {
           <button
             type="submit"
             disabled={!name.trim()}
-            className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-3 rounded-lg font-semibold transition"
+            className="bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 shadow-lg shadow-violet-900/30 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-3 rounded-xl font-semibold transition"
           >
-            Enter the studio
+            Enter the studio →
           </button>
         </form>
         <p className="text-[11px] text-zinc-600 mt-4">Saved locally on this device. No password needed.</p>
