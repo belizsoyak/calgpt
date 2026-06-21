@@ -32,6 +32,7 @@ function parseContract(content) {
 }
 
 export default function App() {
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('calgpt_dark') !== 'false')
   const [user, setUser] = useState(() => localStorage.getItem('calgpt_user') || '')
   const [sessionId] = useState(generateSessionId)
   const [messages, setMessages] = useState([])
@@ -51,6 +52,11 @@ export default function App() {
   const [agentLog, setAgentLog] = useState([])
   const wsRef = useRef(null)
   const bottomRef = useRef(null)
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode)
+    localStorage.setItem('calgpt_dark', darkMode)
+  }, [darkMode])
 
   function signOut() {
     if (audioEngine.isPlaying()) { audioEngine.stop(); setLive(false) }
@@ -194,13 +200,15 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 text-white flex flex-col overflow-hidden">
+    <div className="h-screen dark:bg-zinc-950 bg-gray-50 dark:text-white text-zinc-900 flex flex-col overflow-hidden">
       {/* Top bar */}
-      <header className="border-b border-red-950 bg-zinc-950 px-6 py-3 flex items-center gap-4">
+      <header className="border-b dark:border-red-950 border-red-200 dark:bg-zinc-950 bg-white px-6 py-3 flex items-center gap-4">
         <div className="flex items-center gap-2.5">
           <span className="text-2xl">🎸</span>
           <div className="leading-none">
-            <h1 style={{ fontFamily: "'Metal Mania', cursive" }} className="text-xl text-red-500 tracking-wide">CalGPT</h1>
+            <h1 style={{ fontFamily: "'Metal Mania', cursive" }} className="text-xl dark:text-white text-red-600 tracking-wide">
+              CalGPT <span className="text-sm font-sans tracking-normal" style={{ fontFamily: "'Oswald', sans-serif" }}>(Guitar Pedal Technology)</span>
+            </h1>
             <p className="text-[11px] text-zinc-500 mt-0.5 uppercase tracking-widest" style={{ fontFamily: "'Oswald', sans-serif" }}>AI Tone Studio</p>
           </div>
           <span className={`ml-2 w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-zinc-600'}`}
@@ -229,7 +237,7 @@ export default function App() {
       </header>
 
       {/* Live-audio control strip */}
-      <div className="border-b border-zinc-800 bg-zinc-900/40 px-6 py-2.5 flex items-center gap-3 flex-wrap text-sm">
+      <div className="border-b dark:border-zinc-800 border-gray-200 dark:bg-zinc-900/40 bg-gray-100/60 px-6 py-2.5 flex items-center gap-3 flex-wrap text-sm">
         <button onClick={toggleLive}
           className={`px-4 py-1.5 rounded-lg font-semibold transition ${
             live ? 'bg-green-600 text-white' : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
@@ -281,7 +289,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
 
         {/* Chat panel */}
-        <div className="flex flex-col w-1/2 border-r border-zinc-800">
+        <div className="flex flex-col w-1/2 border-r dark:border-zinc-800 border-gray-200">
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
             {messages.length === 0 && (
               <p className="text-zinc-600 text-sm text-center mt-12">
@@ -292,9 +300,9 @@ export default function App() {
             <div ref={bottomRef} />
           </div>
 
-          <form onSubmit={sendMessage} className="border-t border-zinc-800 p-4 flex gap-2">
+          <form onSubmit={sendMessage} className="border-t dark:border-zinc-800 border-gray-200 p-4 flex gap-2">
             <input
-              className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-red-500 transition text-sm"
+              className="flex-1 dark:bg-zinc-800 bg-white dark:border-zinc-700 border-gray-300 border rounded-lg px-4 py-2 dark:text-white text-zinc-900 dark:placeholder-zinc-500 placeholder-gray-400 focus:outline-none focus:border-red-500 transition text-sm"
               placeholder="SRV, Hendrix, or describe your tone..."
               value={input}
               onChange={e => setInput(e.target.value)}
@@ -364,7 +372,7 @@ export default function App() {
         </div>
 
         {/* Agent Activity feed */}
-        <div className="border-t border-zinc-800 bg-zinc-900/60 px-4 py-3 h-44 overflow-y-auto flex flex-col gap-1.5">
+        <div className="border-t dark:border-zinc-800 border-gray-200 dark:bg-zinc-900/60 bg-gray-100/60 px-4 py-3 h-44 overflow-y-auto flex flex-col gap-1.5">
           <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1">⚡ Agent Activity</p>
           {agentLog.length === 0 ? (
             <p className="text-zinc-700 text-xs">Waiting for agent activity...</p>
@@ -376,6 +384,15 @@ export default function App() {
       </div>
       )}
       </div>
+
+      {/* Dark/Light mode toggle */}
+      <button
+        onClick={() => setDarkMode(d => !d)}
+        className="fixed bottom-5 right-5 w-10 h-10 rounded-full dark:bg-zinc-800 bg-white border dark:border-zinc-700 border-gray-300 shadow-lg flex items-center justify-center text-lg transition hover:scale-110 z-50"
+        title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+      >
+        {darkMode ? '☀️' : '🌙'}
+      </button>
     </div>
   )
 }
@@ -731,16 +748,19 @@ function SignIn({ onSignIn }) {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 text-white flex items-center justify-center px-4">
+    <div className="h-screen dark:bg-zinc-950 bg-gray-50 dark:text-white text-zinc-900 flex items-center justify-center px-4">
       <div className="w-full max-w-sm text-center">
         <div className="text-5xl mb-4">🎸</div>
-        <h1 style={{ fontFamily: "'Metal Mania', cursive" }} className="text-5xl text-red-500 mb-1">CalGPT</h1>
-        <p className="text-zinc-500 mb-8 uppercase tracking-widest text-xs" style={{ fontFamily: "'Oswald', sans-serif" }}>Describe your tone. Hear it live.</p>
+        <h1 style={{ fontFamily: "'Metal Mania', cursive" }} className="text-5xl dark:text-white text-red-600 mb-1">
+          CalGPT
+          <span className="block text-2xl font-sans tracking-normal mt-1" style={{ fontFamily: "'Oswald', sans-serif" }}>(Guitar Pedal Technology)</span>
+        </h1>
+        <p className="text-zinc-500 mb-8 uppercase tracking-widest text-xs mt-3" style={{ fontFamily: "'Oswald', sans-serif" }}>Describe your tone. Hear it live.</p>
 
         <form onSubmit={submit} className="flex flex-col gap-3">
           <input
             autoFocus
-            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-center text-white placeholder-zinc-500 focus:outline-none focus:border-red-500 transition"
+            className="dark:bg-zinc-900 bg-white dark:border-zinc-700 border-gray-300 border rounded-lg px-4 py-3 text-center dark:text-white text-zinc-900 dark:placeholder-zinc-500 placeholder-gray-400 focus:outline-none focus:border-red-500 transition"
             placeholder="Your name"
             value={name}
             onChange={e => setName(e.target.value)}
@@ -748,12 +768,12 @@ function SignIn({ onSignIn }) {
           <button
             type="submit"
             disabled={!name.trim()}
-            className="bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-3 rounded-lg font-semibold transition"
+            className="bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-3 rounded-lg font-semibold transition text-white"
           >
             Enter the studio
           </button>
         </form>
-        <p className="text-[11px] text-zinc-600 mt-4">Saved locally on this device. No password needed.</p>
+        <p className="text-[11px] text-zinc-500 mt-4">Saved locally on this device. No password needed.</p>
       </div>
     </div>
   )
