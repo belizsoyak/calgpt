@@ -1,9 +1,14 @@
-from fastapi import FastAPI
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from agent import generate_preset
+from session import SessionManager
+from vibe_agent import run_vibe_agent
+from critic_agent import run_critic_agent
 
 app = FastAPI(title="CalGPT")
+sessions = SessionManager()
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,6 +30,23 @@ def health():
 @app.post("/vibe")
 async def vibe(req: VibeRequest):
     return await generate_preset(req.vibe)
+
+
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    await sessions.connect(session_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            message = data.get("message", "").strip()
+            if not message:
+                continue
+            result = await run_vibe_agent(session_id, message, sessions)
+            asyncio.create_task(
+                run_critic_agent(session_id, result["contract"], sessions)
+            )
+    except WebSocketDisconnect:
+        sessions.disconnect(session_id)
 
 
 # --- hardware bridge (feat/hardware-bridge) -------------------------------
