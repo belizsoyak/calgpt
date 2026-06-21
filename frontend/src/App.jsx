@@ -480,6 +480,14 @@ function Performance({ live }) {
           <button onClick={() => { setSetlist(null); setActive(null); setCurrent(-1) }}
             className="text-xs text-zinc-500 hover:text-white">edit</button>
         </div>
+        <a
+          href={`${API}/setlist/${setlist.id}/export.csv`}
+          download
+          className="block mb-3 text-center text-xs font-medium text-violet-300 hover:text-white bg-zinc-800/60 hover:bg-zinc-700 rounded-lg py-2 transition"
+          title="Download this setlist as CSV for the ESP32 pedal"
+        >
+          ⬇ Export CSV
+        </a>
         <ul className="flex flex-col gap-1">
           {setlist.songs.map((s, i) => (
             <li key={i}
