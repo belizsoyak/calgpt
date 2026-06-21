@@ -14,6 +14,8 @@ export default function App() {
   const [input, setInput] = useState('')
   const [connected, setConnected] = useState(false)
   const [view, setView] = useState('studio')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const wsRef = useRef(null)
   const bottomRef = useRef(null)
 
@@ -38,12 +40,31 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  function sendMessage(e) {
+  async function sendMessage(e) {
     e.preventDefault()
-    if (!input.trim() || !connected) return
-    setMessages(prev => [...prev, { role: 'user', text: input }])
-    wsRef.current.send(JSON.stringify({ message: input }))
+    const text = input.trim()
+    if (!text || loading) return
+    setMessages(prev => [...prev, { role: 'user', text }])
     setInput('')
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API}/vibe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vibe: text }),
+      })
+      if (!res.ok) throw new Error(`Server error ${res.status}`)
+      // /vibe returns the chain at the TOP LEVEL: { preset_name, effects }
+      const chain = await res.json()
+      setContract(chain)
+      setMessages(prev => [...prev, { role: 'vibe', text: `Dialed in "${chain.preset_name}".` }])
+    } catch (err) {
+      console.error('vibe request failed:', err)
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -90,21 +111,25 @@ export default function App() {
               placeholder="warm 70s blues with slapback delay..."
               value={input}
               onChange={e => setInput(e.target.value)}
-              disabled={!connected}
+              disabled={loading}
             />
             <button
               type="submit"
-              disabled={!connected || !input.trim()}
+              disabled={loading || !input.trim()}
               className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2 rounded-lg font-semibold text-sm transition"
             >
-              Send
+              {loading ? '...' : 'Send'}
             </button>
           </form>
         </div>
 
         {/* Knobs panel */}
         <div className="w-1/2 p-6 overflow-y-auto">
-          {contract ? (
+          {loading ? (
+            <p className="text-zinc-500 text-sm text-center mt-12">Dialing in your tone...</p>
+          ) : error ? (
+            <p className="text-red-400 text-sm text-center mt-12">{error}</p>
+          ) : contract ? (
             <>
               <h2 className="text-lg font-semibold text-violet-400 mb-4">{contract.preset_name}</h2>
               <div className="flex flex-col gap-3">
