@@ -1,19 +1,26 @@
 // Client-side REAL-TIME audio engine (Tone.js).
 //
 // A persistent effect chain is built ONCE; applyChain() only ramps live params,
-// so a looping guitar sample morphs in real time as the tone changes — no
-// re-render, no restart. This is separate from the server /preview render.
+// so the audio morphs in real time as the tone changes — no re-render, no
+// restart. This is separate from the server /preview render.
 //
-//   player -> Distortion -> Chorus -> FeedbackDelay -> Reverb -> Destination
+//   <source> -> Distortion -> Chorus -> FeedbackDelay -> Reverb -> Destination
+//
+// The source is switchable:
+//   - 'file'   : a looping guitar sample (Tone.Player)
+//   - 'guitar' : the user's live input device (Tone.UserMedia)
+// Both feed the SAME chain, so applyChain() behaves identically either way.
 
 import * as Tone from 'tone'
 import defaultLoop from './assets/loop.wav'
 
 const RAMP = 0.05 // seconds — smooth param glide
 
-let player, distortion, chorus, feedbackDelay, reverb
+let player, userMedia, distortion, chorus, feedbackDelay, reverb
 let initialized = false
-let lastSize = null      // reverb.decay regenerates the IR (async), so only set on change
+let running = false
+let source = 'file'      // 'file' | 'guitar'
+let lastSize = null      // reverb.decay regenerates the IR (async); only set on change
 let objectUrl = null     // last URL.createObjectURL, for cleanup
 
 function clamp01(v) {
@@ -26,7 +33,6 @@ function clamp01(v) {
 // still suspended; Tone.start() (from a user gesture) resumes it later.
 function init() {
   if (initialized) return
-  player = new Tone.Player({ url: defaultLoop, loop: true })
   distortion = new Tone.Distortion(0)
   chorus = new Tone.Chorus(1.5, 2.5, 0.5).start()
   feedbackDelay = new Tone.FeedbackDelay(0.25, 0.3)
@@ -38,25 +44,70 @@ function init() {
   feedbackDelay.wet.value = 0
   reverb.wet.value = 0
 
-  player.chain(distortion, chorus, feedbackDelay, reverb, Tone.Destination)
+  // the FX chain is wired once; sources connect into its head (distortion)
+  distortion.chain(chorus, feedbackDelay, reverb, Tone.Destination)
+
+  player = new Tone.Player({ url: defaultLoop, loop: true })
+  userMedia = new Tone.UserMedia()
   initialized = true
 }
 
-// Start the looping playback. MUST be called from a click handler so the
-// browser allows audio (Tone.start resumes the AudioContext).
+function disconnectSources() {
+  if (player.state === 'started') player.stop()
+  try { player.disconnect(distortion) } catch { /* not connected */ }
+  if (userMedia.state === 'started') userMedia.close()
+  try { userMedia.disconnect(distortion) } catch { /* not connected */ }
+}
+
+// Connect + start whichever source is currently selected.
+async function startSource() {
+  if (source === 'guitar') {
+    await userMedia.open()            // prompts for input-device permission
+    userMedia.connect(distortion)
+  } else {
+    await Tone.loaded()               // wait for the sample buffer
+    player.connect(distortion)
+    if (player.state !== 'started') player.start()
+  }
+}
+
+// Start real-time audio. MUST be called from a click handler so the browser
+// allows audio (Tone.start resumes the AudioContext).
 export async function start() {
   await Tone.start()
   init()
-  await Tone.loaded() // wait for the sample buffer(s)
-  if (player.state !== 'started') player.start()
+  await startSource()
+  running = true
 }
 
 export function stop() {
-  if (player && player.state === 'started') player.stop()
+  if (!initialized) return
+  disconnectSources()
+  running = false
 }
 
 export function isPlaying() {
-  return initialized && player.state === 'started'
+  return running
+}
+
+export function getSource() {
+  return source
+}
+
+// Switch between 'file' and 'guitar'. If currently running, swaps the live
+// source seamlessly; the effect chain (and its params) are untouched.
+export async function setSource(mode) {
+  if (mode !== 'file' && mode !== 'guitar') return
+  if (mode === source) return
+  init()
+  const wasRunning = running
+  if (wasRunning) disconnectSources()
+  source = mode
+  if (wasRunning) {
+    await Tone.start()
+    await startSource()
+    running = true
+  }
 }
 
 // Map an effect-chain dict onto the live params and ramp them — no rebuild.
@@ -109,15 +160,16 @@ export function applyChain(chain) {
   }
 }
 
-// Swap the loop source (user-picked File or a URL string). Keeps playing if it was.
+// Swap the file loop source (user-picked File or a URL string). File mode only.
+// Keeps playing if it was playing in file mode.
 export async function loadSource(fileOrUrl) {
   init()
   const url = typeof fileOrUrl === 'string' ? fileOrUrl : URL.createObjectURL(fileOrUrl)
-  const wasPlaying = player.state === 'started'
-  if (wasPlaying) player.stop()
+  const wasPlayingFile = source === 'file' && player.state === 'started'
+  if (wasPlayingFile) player.stop()
   await player.load(url)
   player.loop = true
   if (objectUrl) URL.revokeObjectURL(objectUrl)
   objectUrl = typeof fileOrUrl === 'string' ? null : url
-  if (wasPlaying) player.start()
+  if (wasPlayingFile) player.start()
 }

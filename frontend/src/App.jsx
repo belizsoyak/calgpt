@@ -18,8 +18,18 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [live, setLive] = useState(false)
+  const [source, setSource] = useState('file')   // 'file' | 'guitar'
   const wsRef = useRef(null)
   const bottomRef = useRef(null)
+
+  async function changeSource(mode) {
+    setSource(mode)
+    try {
+      await audioEngine.setSource(mode)   // seamless swap if already live
+    } catch (err) {
+      console.error('source switch failed:', err)
+    }
+  }
 
   // toggle real-time audio; Tone.start() must run inside this click handler
   async function toggleLive() {
@@ -115,10 +125,25 @@ export default function App() {
           >
             {live ? '■ Stop' : '▶ Live'}
           </button>
-          <label className="text-xs text-zinc-500 hover:text-white cursor-pointer" title="Load your own guitar loop">
-            load loop
-            <input type="file" accept="audio/*" onChange={onPickLoop} className="hidden" />
-          </label>
+          <div className="flex gap-1 bg-zinc-800 rounded-lg p-0.5">
+            {[['file', 'File'], ['guitar', 'Guitar']].map(([mode, label]) => (
+              <button
+                key={mode}
+                onClick={() => changeSource(mode)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+                  source === mode ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {source === 'file' && (
+            <label className="text-xs text-zinc-500 hover:text-white cursor-pointer" title="Load your own guitar loop">
+              load loop
+              <input type="file" accept="audio/*" onChange={onPickLoop} className="hidden" />
+            </label>
+          )}
           <div className="flex gap-1">
             {['studio', 'performance'].map(v => (
               <button
