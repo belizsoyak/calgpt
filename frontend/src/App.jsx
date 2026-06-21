@@ -318,6 +318,50 @@ function Performance({ live }) {
   const [active, setActive] = useState(null)   // { song_name, effects, pushed }
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
+  const [autoPlay, setAutoPlay] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const audioRef = useRef(null)   // single shared Audio element
+  const urlRef = useRef(null)     // last object URL, for cleanup
+
+  function stopAudio() {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+    }
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = null
+    }
+  }
+
+  // play a chain through /preview; stops any currently-playing preview first
+  async function playChain(chain) {
+    if (!chain) return
+    stopAudio()
+    setPreviewing(true)
+    try {
+      const res = await fetch(`${API}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(chain),
+      })
+      if (!res.ok) throw new Error(`preview ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      urlRef.current = url
+      if (!audioRef.current) audioRef.current = new Audio()
+      audioRef.current.src = url
+      await audioRef.current.play()
+    } catch (err) {
+      console.error('preview failed:', err)
+      setStatus('Preview failed')
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  // stop audio + free the blob URL when leaving the view
+  useEffect(() => stopAudio, [])
 
   // while live, morph the loop whenever the active song changes (Start/Next/Prev)
   useEffect(() => {
@@ -367,6 +411,8 @@ function Performance({ live }) {
       setCurrent(data.current)
       setActive(data)
       setStatus(data.pushed ? null : 'Pedal unreachable (tone not pushed)')
+      // auto-play the newly-active song's tone right after pushing it
+      if (autoPlay) playChain(setlist.songs[data.current].chain)
     } catch (err) {
       setStatus(`Error: ${err.message}`)
     } finally {
@@ -455,17 +501,26 @@ function Performance({ live }) {
             className="bg-green-600 hover:bg-green-500 disabled:opacity-40 px-8 py-3 rounded-xl font-bold transition">▶ Start</button>
           <button onClick={() => action('next')} disabled={busy}
             className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 px-6 py-3 rounded-xl font-semibold transition">Next ›</button>
+          <label className="ml-auto flex items-center gap-2 text-sm text-zinc-400 cursor-pointer select-none">
+            <input type="checkbox" checked={autoPlay} onChange={e => setAutoPlay(e.target.checked)}
+              className="accent-violet-500 w-4 h-4" />
+            Auto-play on change
+          </label>
         </div>
 
         {status && <p className="mb-4 text-sm text-amber-400">{status}</p>}
 
         {active ? (
           <>
-            <h3 className="text-lg font-semibold text-violet-400 mb-4">
+            <h3 className="text-lg font-semibold text-violet-400 mb-4 flex items-center gap-3">
               {active.song_name}
-              <span className={`ml-3 text-xs ${active.pushed ? 'text-green-400' : 'text-zinc-500'}`}>
+              <span className={`text-xs ${active.pushed ? 'text-green-400' : 'text-zinc-500'}`}>
                 {active.pushed ? '● pushed to pedal' : '○ not pushed'}
               </span>
+              <button onClick={() => playChain(setlist.songs[current].chain)} disabled={previewing}
+                className="ml-auto bg-violet-600 hover:bg-violet-500 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold transition">
+                {previewing ? 'Loading...' : '▶ Hear it'}
+              </button>
             </h3>
             <div className="flex flex-col gap-3 max-w-xl">
               {active.effects.map((fx, i) => <EffectCard key={i} fx={fx} />)}
