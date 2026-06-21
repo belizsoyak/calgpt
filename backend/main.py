@@ -1,4 +1,5 @@
 import asyncio
+import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,9 +7,30 @@ from agent import generate_preset
 from session import SessionManager
 from vibe_agent import run_vibe_agent
 from critic_agent import run_critic_agent
+from research_agent import lookup_artist
+from memory_agent import update_memory
+from feedback_agent import get_quick_fixes
+from band_bus import send_to_room, listen_for_responses
 
 app = FastAPI(title="CalGPT")
 sessions = SessionManager()
+
+
+@app.on_event("startup")
+async def startup():
+    room_id = os.getenv("BAND_ROOM_ID", "").strip()
+    if not room_id:
+        return
+
+    async def forward(msg):
+        for sid in list(sessions.connections.keys()):
+            await sessions.send(sid, {
+                "type": "agent_message",
+                "agent": msg["agent"],
+                "content": msg["content"],
+            })
+
+    asyncio.create_task(listen_for_responses(room_id, forward))
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +51,9 @@ def health():
 
 @app.post("/vibe")
 async def vibe(req: VibeRequest):
+    hit = lookup_artist(req.vibe)
+    if hit:
+        return hit
     return await generate_preset(req.vibe)
 
 
@@ -38,13 +63,57 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     try:
         while True:
             data = await websocket.receive_json()
-            message = data.get("message", "").strip()
+            msg_type = data.get("type", "chat")
+
+            if msg_type == "feedback":
+                rating = data.get("rating")
+                contract = data.get("contract")
+                if rating == "positive" and contract:
+                    sessions.add_approved_chain(session_id, contract)
+                    asyncio.create_task(update_memory(session_id, sessions))
+                    await sessions.send(session_id, {"type": "feedback_saved"})
+                elif rating == "negative" and contract:
+                    fixes = await get_quick_fixes(contract, session_id, sessions)
+                    await sessions.send(session_id, {"type": "quick_fixes", "fixes": fixes})
+                continue
+
+            if msg_type == "quick_fix":
+                fix = data.get("fix", "")
+                contract = data.get("contract")
+                if contract:
+                    sessions.add_rejection(session_id, fix, contract)
+                message = fix
+            else:
+                message = data.get("message", "").strip()
+
             if not message:
                 continue
+
+            # Research agent: instant preset for known artists
+            hit = lookup_artist(message)
+            if hit:
+                await sessions.send(session_id, {
+                    "type": "chain_update",
+                    "agent": "vibe",
+                    "message": f"Loaded {hit['preset_name']}.",
+                    "contract": hit,
+                })
+                asyncio.create_task(run_critic_agent(session_id, hit, sessions))
+                continue
+
+            # Inject memory context from prior turns
+            memory = sessions.get_memory(session_id)
+            if memory:
+                message = f"{message} [tone profile: {memory}]"
+
+            # Always run direct agents for instant UI response
             result = await run_vibe_agent(session_id, message, sessions)
-            asyncio.create_task(
-                run_critic_agent(session_id, result["contract"], sessions)
-            )
+            asyncio.create_task(run_critic_agent(session_id, result["contract"], sessions))
+            asyncio.create_task(update_memory(session_id, sessions))
+
+            # Also fire-and-forget to Band room for agent-to-agent communication
+            if os.getenv("BAND_ROOM_ID", "").strip():
+                asyncio.create_task(send_to_room(message, mention="@VibeAgent"))
     except WebSocketDisconnect:
         sessions.disconnect(session_id)
 

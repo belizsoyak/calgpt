@@ -8,6 +8,27 @@ function generateSessionId() {
   return Math.random().toString(36).slice(2)
 }
 
+function stripJson(content) {
+  return content.replace(/```json[\s\S]*?```/g, '').replace(/@\w+/g, m => m).trim().slice(0, 120)
+}
+
+function parseContract(content) {
+  const match = content.match(/```json\s*([\s\S]*?)\s*```/)
+  if (match) {
+    try {
+      const data = JSON.parse(match[1])
+      if (data.effects) return data
+      if (data.contract?.effects) return data.contract
+    } catch {}
+  }
+  try {
+    const data = JSON.parse(content)
+    if (data.effects) return data
+    if (data.contract?.effects) return data.contract
+  } catch {}
+  return null
+}
+
 export default function App() {
   const [user, setUser] = useState(() => localStorage.getItem('calgpt_user') || '')
   const [sessionId] = useState(generateSessionId)
@@ -23,6 +44,9 @@ export default function App() {
   const [devices, setDevices] = useState([])
   const [deviceId, setDeviceId] = useState('')
   const [audioError, setAudioError] = useState(null)
+  const [feedbackState, setFeedbackState] = useState(null) // null | 'saved' | 'quick_fixes'
+  const [quickFixes, setQuickFixes] = useState([])
+  const [agentLog, setAgentLog] = useState([])
   const wsRef = useRef(null)
   const bottomRef = useRef(null)
 
@@ -101,8 +125,34 @@ export default function App() {
       if (data.type === 'chain_update') {
         setContract(data.contract)
         setMessages(prev => [...prev, { role: 'vibe', text: data.message }])
+        setLoading(false)
+        setFeedbackState(null)
+        setQuickFixes([])
       } else if (data.type === 'critic_message') {
         setMessages(prev => [...prev, { role: 'critic', text: data.message }])
+      } else if (data.type === 'agent_message') {
+        setMessages(prev => [...prev, { role: data.agent, text: data.content }])
+        setAgentLog(prev => [...prev.slice(-19), {
+          agent: data.agent,
+          text: stripJson(data.content),
+          ts: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        }])
+        setLoading(false)
+        // If VibeAgent included a JSON contract, parse and apply it
+        if (data.agent === 'VibeAgent') {
+          const contract = parseContract(data.content)
+          if (contract) {
+            setContract(contract)
+            setFeedbackState(null)
+            setQuickFixes([])
+          }
+        }
+      } else if (data.type === 'quick_fixes') {
+        setQuickFixes(data.fixes)
+        setFeedbackState('quick_fixes')
+      } else if (data.type === 'feedback_saved') {
+        setFeedbackState('saved')
+        setTimeout(() => setFeedbackState(null), 2000)
       }
     }
     wsRef.current = ws
@@ -113,31 +163,28 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function sendMessage(e) {
+  function sendMessage(e) {
     e.preventDefault()
     const text = input.trim()
-    if (!text || loading) return
+    if (!text || loading || !connected) return
     setMessages(prev => [...prev, { role: 'user', text }])
     setInput('')
     setLoading(true)
     setError(null)
-    try {
-      const res = await fetch(`${API}/vibe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vibe: text }),
-      })
-      if (!res.ok) throw new Error(`Server error ${res.status}`)
-      // /vibe returns the chain at the TOP LEVEL: { preset_name, effects }
-      const chain = await res.json()
-      setContract(chain)
-      setMessages(prev => [...prev, { role: 'vibe', text: `Dialed in "${chain.preset_name}".` }])
-    } catch (err) {
-      console.error('vibe request failed:', err)
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
+    wsRef.current.send(JSON.stringify({ message: text }))
+  }
+
+  function sendFeedback(rating) {
+    if (!contract || !connected) return
+    wsRef.current.send(JSON.stringify({ type: 'feedback', rating, contract }))
+  }
+
+  function sendQuickFix(fix) {
+    if (!contract || !connected) return
+    setMessages(prev => [...prev, { role: 'user', text: fix }])
+    setLoading(true)
+    setFeedbackState(null)
+    wsRef.current.send(JSON.stringify({ type: 'quick_fix', fix, contract }))
   }
 
   if (!user) {
@@ -147,12 +194,12 @@ export default function App() {
   return (
     <div className="h-screen bg-zinc-950 text-white flex flex-col overflow-hidden">
       {/* Top bar */}
-      <header className="border-b border-zinc-800 px-6 py-3 flex items-center gap-4">
+      <header className="border-b border-red-950 bg-zinc-950 px-6 py-3 flex items-center gap-4">
         <div className="flex items-center gap-2.5">
           <span className="text-2xl">🎸</span>
           <div className="leading-none">
-            <h1 className="text-lg font-bold tracking-tight">CalGPT</h1>
-            <p className="text-[11px] text-zinc-500 mt-0.5">AI guitar tone studio</p>
+            <h1 style={{ fontFamily: "'Metal Mania', cursive" }} className="text-xl text-red-500 tracking-wide">CalGPT</h1>
+            <p className="text-[11px] text-zinc-500 mt-0.5 uppercase tracking-widest" style={{ fontFamily: "'Oswald', sans-serif" }}>AI Tone Studio</p>
           </div>
           <span className={`ml-2 w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-zinc-600'}`}
             title={connected ? 'agent connected' : 'connecting...'} />
@@ -163,14 +210,14 @@ export default function App() {
             {['studio', 'performance'].map(v => (
               <button key={v} onClick={() => setView(v)}
                 className={`px-3 py-1.5 rounded-md text-sm font-medium capitalize transition ${
-                  view === v ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+                  view === v ? 'bg-red-600 text-white' : 'text-zinc-400 hover:text-white'
                 }`}>
                 {v}
               </button>
             ))}
           </div>
           <div className="flex items-center gap-2 pl-3 border-l border-zinc-800">
-            <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold uppercase">
+            <div className="w-7 h-7 rounded-full bg-red-600 flex items-center justify-center text-xs font-bold uppercase">
               {user[0] || '?'}
             </div>
             <span className="text-sm text-zinc-300 hidden sm:block">{user}</span>
@@ -199,7 +246,7 @@ export default function App() {
           {[['file', 'File'], ['guitar', 'Guitar']].map(([mode, label]) => (
             <button key={mode} onClick={() => changeSource(mode)}
               className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
-                source === mode ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+                source === mode ? 'bg-red-600 text-white' : 'text-zinc-400 hover:text-white'
               }`}>
               {label}
             </button>
@@ -214,7 +261,7 @@ export default function App() {
         ) : (
           <>
             <select value={deviceId} onChange={e => changeDevice(e.target.value)}
-              className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-500 max-w-[220px]">
+              className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-red-500 max-w-[220px]">
               <option value="">Default input</option>
               {devices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
             </select>
@@ -245,8 +292,8 @@ export default function App() {
 
           <form onSubmit={sendMessage} className="border-t border-zinc-800 p-4 flex gap-2">
             <input
-              className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition text-sm"
-              placeholder="warm 70s blues with slapback delay..."
+              className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-red-500 transition text-sm"
+              placeholder="SRV, Hendrix, or describe your tone..."
               value={input}
               onChange={e => setInput(e.target.value)}
               disabled={loading}
@@ -254,24 +301,57 @@ export default function App() {
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2 rounded-lg font-semibold text-sm transition"
+              className="bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2 rounded-lg font-semibold text-sm transition"
             >
               {loading ? '...' : 'Send'}
             </button>
           </form>
         </div>
 
-        {/* Knobs panel */}
-        <div className="w-1/2 p-6 overflow-y-auto">
+        {/* Right panel: pedals + agent activity */}
+        <div className="w-1/2 flex flex-col overflow-hidden">
+        <div className="flex-1 p-6 overflow-y-auto">
           {loading ? (
             <p className="text-zinc-500 text-sm text-center mt-12">Dialing in your tone...</p>
           ) : error ? (
             <p className="text-red-400 text-sm text-center mt-12">{error}</p>
           ) : contract ? (
             <>
-              <h2 className="text-lg font-semibold text-violet-400 mb-4">{contract.preset_name}</h2>
-              <div className="flex flex-col gap-3">
-                {contract.effects.map((fx, i) => <EffectCard key={i} fx={fx} />)}
+              <h2 className="text-lg font-semibold text-red-400 mb-4">{contract.preset_name}</h2>
+              <div className="flex flex-col gap-2">
+                {contract.effects.map((fx, i) => (
+                  <Pedal key={i} fx={fx} isLast={i === contract.effects.length - 1} />
+                ))}
+              </div>
+
+              {/* Feedback row */}
+              <div className="mt-4 flex flex-col gap-2">
+                {feedbackState === 'saved' ? (
+                  <p className="text-green-400 text-xs text-center">✓ Saved to session</p>
+                ) : feedbackState === 'quick_fixes' ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-zinc-500 text-xs">Pick a fix:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {quickFixes.map(fix => (
+                        <button key={fix} onClick={() => sendQuickFix(fix)}
+                          className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition">
+                          {fix}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button onClick={() => sendFeedback('positive')}
+                      className="flex-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-3 py-2 rounded-lg text-sm transition">
+                      👍 Sounds right
+                    </button>
+                    <button onClick={() => sendFeedback('negative')}
+                      className="flex-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-3 py-2 rounded-lg text-sm transition">
+                      👎 Not quite
+                    </button>
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -279,6 +359,17 @@ export default function App() {
               Effect chain will appear here...
             </p>
           )}
+        </div>
+
+        {/* Agent Activity feed */}
+        <div className="border-t border-zinc-800 bg-zinc-900/60 px-4 py-3 h-44 overflow-y-auto flex flex-col gap-1.5">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold mb-1">⚡ Agent Activity</p>
+          {agentLog.length === 0 ? (
+            <p className="text-zinc-700 text-xs">Waiting for agent activity...</p>
+          ) : (
+            agentLog.map((entry, i) => <AgentLogEntry key={i} entry={entry} />)
+          )}
+        </div>
         </div>
       </div>
       )}
@@ -289,16 +380,26 @@ export default function App() {
 
 function ChatMessage({ msg }) {
   const styles = {
-    user:   'self-end bg-violet-600 text-white',
-    vibe:   'self-start bg-zinc-800 text-zinc-200',
-    critic: 'self-start bg-amber-950/60 border border-amber-700/50 text-amber-300',
+    user:          'self-end bg-red-600 text-white',
+    vibe:          'self-start bg-zinc-800 text-zinc-200',
+    critic:        'self-start bg-amber-950/60 border border-amber-700/50 text-amber-300',
+    VibeAgent:     'self-start bg-red-950/60 border border-red-700/50 text-red-300',
+    CriticAgent:   'self-start bg-amber-950/60 border border-amber-700/50 text-amber-300',
+    ResearchAgent: 'self-start bg-blue-950/60 border border-blue-700/50 text-blue-300',
+    MemoryAgent:   'self-start bg-yellow-950/60 border border-yellow-700/50 text-yellow-300',
+    FeedbackAgent: 'self-start bg-green-950/60 border border-green-700/50 text-green-300',
   }
-  const labels = { vibe: 'Vibe Agent', critic: 'Critic' }
+  const labels = {
+    vibe: 'Vibe Agent', critic: 'Critic',
+    VibeAgent: 'Vibe Agent ⚡ Band', CriticAgent: 'Critic ⚡ Band',
+    ResearchAgent: 'Research ⚡ Band', MemoryAgent: 'Memory ⚡ Band',
+    FeedbackAgent: 'Feedback ⚡ Band',
+  }
 
   return (
-    <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm ${styles[msg.role]}`}>
+    <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm ${styles[msg.role] || 'self-start bg-zinc-800 text-zinc-200'}`}>
       {msg.role !== 'user' && (
-        <p className="text-xs opacity-50 mb-1">{labels[msg.role]}</p>
+        <p className="text-xs opacity-50 mb-1">{labels[msg.role] || msg.role}</p>
       )}
       {msg.text}
     </div>
@@ -424,17 +525,17 @@ function Performance({ live }) {
   if (!setlist) {
     return (
       <div className="flex-1 overflow-y-auto p-6 max-w-2xl mx-auto w-full">
-        <h2 className="text-lg font-semibold text-violet-400 mb-4">Build a setlist</h2>
+        <h2 className="text-lg font-semibold text-red-400 mb-4">Build a setlist</h2>
         <form onSubmit={buildSetlist} className="flex flex-col gap-3">
           <div className="flex gap-2">
             <input
-              className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500"
+              className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500"
               placeholder="Setlist name"
               value={name}
               onChange={e => setName(e.target.value)}
             />
             <input
-              className="w-48 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-violet-500"
+              className="w-48 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-red-500"
               placeholder="esp_ip (host:port)"
               value={espIp}
               onChange={e => setEspIp(e.target.value)}
@@ -443,13 +544,13 @@ function Performance({ live }) {
           {rows.map((r, i) => (
             <div key={i} className="flex gap-2">
               <input
-                className="w-1/3 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500"
+                className="w-1/3 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500"
                 placeholder={`Song ${i + 1} name`}
                 value={r.song_name}
                 onChange={e => updateRow(i, 'song_name', e.target.value)}
               />
               <input
-                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500"
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500"
                 placeholder="tone vibe, e.g. warm blues with slapback"
                 value={r.vibe}
                 onChange={e => updateRow(i, 'vibe', e.target.value)}
@@ -460,7 +561,7 @@ function Performance({ live }) {
             <button type="button" onClick={addRow}
               className="text-sm text-zinc-400 hover:text-white px-3 py-2">+ Add song</button>
             <button type="submit" disabled={busy}
-              className="ml-auto bg-violet-600 hover:bg-violet-500 disabled:opacity-40 px-5 py-2 rounded-lg font-semibold text-sm transition">
+              className="ml-auto bg-red-600 hover:bg-red-500 disabled:opacity-40 px-5 py-2 rounded-lg font-semibold text-sm transition">
               {busy ? 'Building...' : 'Build setlist'}
             </button>
           </div>
@@ -483,7 +584,7 @@ function Performance({ live }) {
         <a
           href={`${API}/setlist/${setlist.id}/export.csv`}
           download
-          className="block mb-3 text-center text-xs font-medium text-violet-300 hover:text-white bg-zinc-800/60 hover:bg-zinc-700 rounded-lg py-2 transition"
+          className="block mb-3 text-center text-xs font-medium text-red-300 hover:text-white bg-zinc-800/60 hover:bg-zinc-700 rounded-lg py-2 transition"
           title="Download this setlist as CSV for the ESP32 pedal"
         >
           ⬇ Export CSV
@@ -492,7 +593,7 @@ function Performance({ live }) {
           {setlist.songs.map((s, i) => (
             <li key={i}
               className={`rounded-lg px-3 py-2 text-sm transition ${
-                i === current ? 'bg-violet-600 text-white font-semibold' : 'bg-zinc-800/50 text-zinc-300'
+                i === current ? 'bg-red-600 text-white font-semibold' : 'bg-zinc-800/50 text-zinc-300'
               }`}>
               <span className="opacity-50 mr-2">{i + 1}</span>{s.song_name}
             </li>
@@ -511,7 +612,7 @@ function Performance({ live }) {
             className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 px-6 py-3 rounded-xl font-semibold transition">Next ›</button>
           <label className="ml-auto flex items-center gap-2 text-sm text-zinc-400 cursor-pointer select-none">
             <input type="checkbox" checked={autoPlay} onChange={e => setAutoPlay(e.target.checked)}
-              className="accent-violet-500 w-4 h-4" />
+              className="accent-red-500 w-4 h-4" />
             Auto-play on change
           </label>
         </div>
@@ -520,18 +621,20 @@ function Performance({ live }) {
 
         {active ? (
           <>
-            <h3 className="text-lg font-semibold text-violet-400 mb-4 flex items-center gap-3">
+            <h3 className="text-lg font-semibold text-red-400 mb-4 flex items-center gap-3">
               {active.song_name}
               <span className={`text-xs ${active.pushed ? 'text-green-400' : 'text-zinc-500'}`}>
                 {active.pushed ? '● pushed to pedal' : '○ not pushed'}
               </span>
               <button onClick={() => playChain(setlist.songs[current].chain)} disabled={previewing}
-                className="ml-auto bg-violet-600 hover:bg-violet-500 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold transition">
+                className="ml-auto bg-red-600 hover:bg-red-500 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold transition">
                 {previewing ? 'Loading...' : '▶ Hear it'}
               </button>
             </h3>
-            <div className="flex flex-col gap-3 max-w-xl">
-              {active.effects.map((fx, i) => <EffectCard key={i} fx={fx} />)}
+            <div className="flex flex-col gap-2 max-w-xl">
+              {active.effects.map((fx, i) => (
+                <Pedal key={i} fx={fx} isLast={i === active.effects.length - 1} />
+              ))}
             </div>
           </>
         ) : (
@@ -542,28 +645,70 @@ function Performance({ live }) {
   )
 }
 
-function EffectCard({ fx }) {
-  const { type, ...params } = fx
+const AGENT_COLOR = {
+  VibeAgent:     { dot: 'bg-red-500',    text: 'text-red-400'    },
+  CriticAgent:   { dot: 'bg-amber-500',  text: 'text-amber-400'  },
+  ResearchAgent: { dot: 'bg-blue-500',   text: 'text-blue-400'   },
+  MemoryAgent:   { dot: 'bg-yellow-500', text: 'text-yellow-400' },
+  FeedbackAgent: { dot: 'bg-green-500',  text: 'text-green-400'  },
+}
+
+function AgentLogEntry({ entry }) {
+  const c = AGENT_COLOR[entry.agent] || { dot: 'bg-zinc-500', text: 'text-zinc-400' }
   return (
-    <div className="bg-zinc-800 rounded-lg px-4 py-3">
-      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest mb-3">{type}</p>
-      <div className="flex flex-wrap gap-4">
-        {Object.entries(params).map(([k, v]) => <Knob key={k} label={k} value={v} />)}
-      </div>
+    <div className="flex items-start gap-2 text-xs">
+      <span className="text-zinc-600 font-mono mt-0.5 shrink-0">{entry.ts}</span>
+      <span className={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${c.dot}`} />
+      <span className={`font-semibold shrink-0 ${c.text}`}>{entry.agent}</span>
+      <span className="text-zinc-400 truncate">{entry.text}</span>
     </div>
   )
 }
 
-function Knob({ label, value }) {
+const PEDAL_THEME = {
+  overdrive: { bg: 'bg-amber-950',   border: 'border-amber-600',   led: 'bg-amber-400',   glow: '#f59e0b', label: 'text-amber-400',   knob: '#f59e0b' },
+  chorus:    { bg: 'bg-blue-950',    border: 'border-blue-500',    led: 'bg-blue-400',    glow: '#60a5fa', label: 'text-blue-400',    knob: '#60a5fa' },
+  delay:     { bg: 'bg-emerald-950', border: 'border-emerald-600', led: 'bg-emerald-400', glow: '#34d399', label: 'text-emerald-400', knob: '#34d399' },
+  reverb:    { bg: 'bg-red-950',  border: 'border-red-700',  led: 'bg-red-400',  glow: '#ef4444', label: 'text-red-400',  knob: '#ef4444' },
+}
+
+function Pedal({ fx, isLast }) {
+  const { type, ...params } = fx
+  const t = PEDAL_THEME[type] || PEDAL_THEME.reverb
+  return (
+    <div className="flex items-stretch gap-0">
+      <div className={`flex-1 ${t.bg} border ${t.border} rounded-xl p-4 relative`}>
+        {/* LED */}
+        <div
+          className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${t.led}`}
+          style={{ boxShadow: `0 0 7px 2px ${t.glow}` }}
+        />
+        <p className={`text-xs font-bold uppercase tracking-widest mb-4 ${t.label}`}>{type}</p>
+        <div className="flex flex-wrap gap-5">
+          {Object.entries(params).map(([k, v]) => <Knob key={k} label={k} value={v} color={t.knob} />)}
+        </div>
+        {/* footswitch */}
+        <div className="mt-4 flex justify-center">
+          <div className="w-8 h-4 rounded-full bg-zinc-700 border border-zinc-600" />
+        </div>
+      </div>
+      {!isLast && (
+        <div className="flex items-center px-1 text-zinc-600 text-xs select-none">→</div>
+      )}
+    </div>
+  )
+}
+
+function Knob({ label, value, color }) {
   const pct = label === 'rate_hz' ? (value / 5) * 100
             : label === 'time_ms' ? (value / 2000) * 100
             : value * 100
   return (
-    <div className="flex flex-col items-center gap-1 min-w-[56px]">
-      <div className="w-10 h-10 rounded-full bg-zinc-700 flex items-center justify-center relative">
+    <div className="flex flex-col items-center gap-1 min-w-[52px]">
+      <div className="w-10 h-10 rounded-full bg-zinc-800 border border-zinc-600 flex items-center justify-center relative">
         <div
-          className="w-1 h-4 bg-violet-400 rounded absolute bottom-1/2 origin-bottom"
-          style={{ transform: `rotate(${-140 + pct * 2.8}deg)` }}
+          className="w-1 h-4 rounded absolute bottom-1/2 origin-bottom"
+          style={{ transform: `rotate(${-140 + pct * 2.8}deg)`, backgroundColor: color }}
         />
       </div>
       <span className="text-xs text-zinc-500">{label}</span>
@@ -587,13 +732,13 @@ function SignIn({ onSignIn }) {
     <div className="h-screen bg-zinc-950 text-white flex items-center justify-center px-4">
       <div className="w-full max-w-sm text-center">
         <div className="text-5xl mb-4">🎸</div>
-        <h1 className="text-3xl font-bold tracking-tight mb-1">CalGPT</h1>
-        <p className="text-zinc-500 mb-8">Describe a tone in plain words — hear it live, build a setlist, send it to your pedal.</p>
+        <h1 style={{ fontFamily: "'Metal Mania', cursive" }} className="text-5xl text-red-500 mb-1">CalGPT</h1>
+        <p className="text-zinc-500 mb-8 uppercase tracking-widest text-xs" style={{ fontFamily: "'Oswald', sans-serif" }}>Describe your tone. Hear it live.</p>
 
         <form onSubmit={submit} className="flex flex-col gap-3">
           <input
             autoFocus
-            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-center text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition"
+            className="bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-center text-white placeholder-zinc-500 focus:outline-none focus:border-red-500 transition"
             placeholder="Your name"
             value={name}
             onChange={e => setName(e.target.value)}
@@ -601,7 +746,7 @@ function SignIn({ onSignIn }) {
           <button
             type="submit"
             disabled={!name.trim()}
-            className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-3 rounded-lg font-semibold transition"
+            className="bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-3 rounded-lg font-semibold transition"
           >
             Enter the studio
           </button>
