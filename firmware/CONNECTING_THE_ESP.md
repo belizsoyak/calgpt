@@ -42,6 +42,11 @@ Keep `struct ToneParams`'s field names/order aligned to these columns.
    `127.0.0.1`, which the ESP can't reach — and the `SETLIST_ID` returned by
    `POST /setlist`. `fetchSetlistFromBackend()` does an `HTTPClient` GET and, on
    `200`, streams the body straight to `/setlist.csv` on LittleFS.
+   - **Backend must listen on the LAN, not just localhost.** Start it with
+     `uvicorn main:app --host 0.0.0.0 --port 8000` (default binds `127.0.0.1`,
+     which the ESP can't reach). The ESP and laptop must be on the same WiFi,
+     and the laptop firewall must allow the connection. `LAPTOP_IP` can change
+     when you switch networks.
    - **On boot:** `setup()` calls it right after WiFi connects (before loading).
    - **On demand:** `POST /reload` to the pedal re-fetches, reloads, and jumps to
      song 0, responding `{"ok":<bool>,"songs":<count>}`. Handy for updating the
