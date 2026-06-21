@@ -1,112 +1,109 @@
-# CalGPT
+# CalGPT 🎸
 
-An AI guitar tone agent — describe a tone in plain language, get a DSP effect chain back.
+> Describe a guitar tone in plain language. Five AI agents research it, engineer it, critique it, and remember your preferences — all in real time.
+
+The bigger vision: a studio session where a producer says *"give me early Clapton, but darker"* and the effects update automatically. No gear knowledge required.
+
+---
+
+## Multi-agent architecture (Band)
+
+The CalGPT UI posts your message to a shared Band room. Five agents coordinate autonomously from there:
+
+```
+User message
+    │
+    ▼
+research_agent   — identifies artist gear or translates descriptors into gear language
+    │
+    ▼
+vibe_agent       — engineers the full JSON effect chain
+    │
+  ┌─┴─┐
+  ▼   ▼
+critic_agent    memory_agent
+  │   └── logs tone keywords, sends profile back to vibe_agent
+  │
+  └── (if issue) → vibe_agent  "reduce reverb mix to 0.3"
+       (if solid) → memory_agent  "log this"
+```
+
+`feedback_agent` activates on 👎 — diagnoses the chain and routes 3 quick fixes back to `vibe_agent`.
+
+---
+
+## Features
+
+- **Studio mode** — type a tone or artist name, get an effect chain rendered as interactive stomp-box knobs
+- **Performance mode** — build a setlist, precompute every song's tone, flip through with Prev/Next
+- **Live audio** — run your guitar through the chain in the browser via Web Audio API
+- **Hardware bridge** — ESP32 firmware receives the JSON chain over WiFi and runs the DSP on-device. Setlists export as CSV and load onto flash so tone switching works off a footswitch with no network needed mid-show. *(WiFi live-push didn't make it in time — the architecture is ready, the hardware-software connection needed more time.)*
+
+---
 
 ## Stack
 
 | Layer | Tech |
-|-------|------|
-| Frontend | React + Vite + Tailwind (Vercel) |
-| Backend | Python FastAPI |
-| DSP | Spotify pedalboard |
-| AI | Anthropic claude-sonnet-4-6 |
+|---|---|
+| Agent communication | [Band](https://app.band.ai) |
+| AI | Anthropic `claude-sonnet-4-6` |
+| Backend | Python FastAPI + WebSocket |
+| DSP / preview | Spotify `pedalboard` |
+| Frontend | React + Vite + Tailwind CSS v4 |
+| Live audio | Tone.js + Web Audio API |
+| Hardware | ESP32 (C++ firmware) |
 
-## Quick start
+---
 
-### Backend
+## Running locally
 
 ```bash
-cd backend
-cp .env.example .env          # add your ANTHROPIC_API_KEY
+# backend
+cd backend && python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env   # ANTHROPIC_API_KEY + BAND_* vars
 uvicorn main:app --reload
+
+# band agents (4 terminals)
+python band_research_agent.py
+python band_vibe_agent.py
+python band_critic_agent.py
+python band_memory_agent.py
+
+# frontend
+cd frontend && npm install && npm run dev
 ```
 
-Server runs at http://localhost:8000. Docs at http://localhost:8000/docs.
+---
 
-### Frontend
+## Environment
 
 ```bash
-cd frontend
-npm install
-npm run dev
+ANTHROPIC_API_KEY=sk-ant-...
+BAND_REST_URL=https://app.band.ai/
+BAND_WS_URL=wss://app.band.ai/api/v1/socket/websocket
+BAND_ROOM_ID=<your-room-uuid>
 ```
 
-Dev server at http://localhost:5173.
-
-## API
-
-### `GET /health`
-```json
-{ "status": "ok" }
+Agent credentials in `backend/agent_config.yaml` (gitignored):
+```yaml
+vibe_agent:
+  agent_id: "..."
+  api_key:  "band_a_..."
+# research_agent, critic_agent, memory_agent, feedback_agent
 ```
 
-### `POST /vibe`
-```json
-// request
-{ "vibe": "warm vintage blues with a hint of spring reverb" }
-
-// response
-{
-  "preset_name": "Warm Vintage Blues",
-  "effects": [
-    { "type": "overdrive", "drive": 0.35, "tone": 0.4, "mix": 0.8 },
-    { "type": "reverb", "size": 0.3, "damping": 0.6, "mix": 0.25 }
-  ]
-}
-```
+---
 
 ## Effect schema
 
-| Effect | Parameters |
-|--------|-----------|
-| `overdrive` | `drive` 0–1, `tone` 0–1, `mix` 0–1 |
-| `chorus` | `rate_hz` 0.1–5.0, `depth` 0–1, `mix` 0–1 |
-| `delay` | `time_ms` 50–2000, `feedback` 0–1, `mix` 0–1 |
-| `reverb` | `size` 0–1, `damping` 0–1, `mix` 0–1 |
-
-## File map
-
-```
-backend/
-  main.py       — FastAPI app, CORS, /health + /vibe + /pedal endpoints
-  agent.py      — Claude call, system prompt, JSON parsing
-  fx_engine.py  — pedalboard DSP (stubs if not installed)
-  esp32_bridge.py — flatten a chain + push it to the ESP32 pedal over WiFi
-  mock_pedal.py — local stand-in for the pedal (test the bridge w/o hardware)
-firmware/
-  calgpt_pedal.ino — ESP32 firmware: DSP chain + POST /params WiFi server
-frontend/
-  src/          — React app
-```
-
-## Hardware bridge
-
-Push a generated tone to a physical ESP32 pedal.
-
-### `POST /pedal`
 ```json
-// request — esp_ip is host:port, NO http:// prefix
-{ "vibe": "warm 70s blues with slapback delay", "esp_ip": "192.168.1.42:80" }
-
-// response
-{ "chain": { "preset_name": "...", "effects": [ ... ] }, "pushed": true }
+{
+  "preset_name": "Texas Crunch",
+  "effects": [
+    { "type": "overdrive", "drive": 0.6, "tone": 0.5, "mix": 0.9 },
+    { "type": "delay",     "time_ms": 220, "feedback": 0.3, "mix": 0.25 },
+    { "type": "reverb",    "size": 0.35, "damping": 0.5, "mix": 0.2 }
+  ]
+}
 ```
-`pushed` is `false` (never an error) if the pedal is unreachable.
-
-### Test it without hardware
-
-```bash
-# terminal 1: backend
-cd backend && uvicorn main:app --reload
-
-# terminal 2: mock pedal
-cd backend && python mock_pedal.py        # http://127.0.0.1:9000
-
-# terminal 3: fire a call, then watch http://127.0.0.1:9000/ update
-curl -X POST http://localhost:8000/pedal -H "Content-Type: application/json" \
-  -d '{"vibe":"warm blues with slapback","esp_ip":"127.0.0.1:9000"}'
-```
-
-The mock pedal prints the flattened params (`od_*`, `vib_*`, `trem_*`, `dl_*`, `rv_mix`)
-to its console and on its dashboard — that's the same payload the real firmware receives.

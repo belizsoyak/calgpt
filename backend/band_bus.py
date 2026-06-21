@@ -24,6 +24,15 @@ def _vibe_creds() -> tuple[str, str]:
         return "", os.getenv("BAND_VIBE_API_KEY", "")
 
 
+def _listener_key() -> str:
+    """Use feedback_agent key for listening — keeps it separate from the vibe_agent terminal."""
+    try:
+        _, key = load_agent_config("feedback_agent")
+        return key
+    except Exception:
+        return _vibe_creds()[1]
+
+
 def _research_creds() -> tuple[str, str]:
     try:
         agent_id, key = load_agent_config("research_agent")
@@ -71,44 +80,50 @@ async def send_to_room(message: str):
 
 
 async def listen_for_responses(room_id: str, on_message):
-    uri = f"{BAND_WS}?api_key={_vibe_key()}&vsn=2.0.0"
+    """Poll Band REST API for new agent messages — avoids WS key conflicts with running terminals."""
+    _, key = _vibe_creds()
+    last_seen_id: str | None = None
+
     while True:
         try:
-            async with websockets.connect(uri) as ws:
-                # Join the chat room Phoenix channel
-                await ws.send(json.dumps(
-                    ["1", "1", f"chat_room:{room_id}", "phx_join", {}]
-                ))
+            async with httpx.AsyncClient() as client:
+                res = await client.get(
+                    f"{BAND_REST}/chats/{room_id}/messages",
+                    headers={"X-API-Key": key},
+                    params={"page": 1, "page_size": 20},
+                    timeout=10,
+                )
+                if res.status_code != 200:
+                    logger.warning(f"Band poll error: {res.status_code} {res.text[:100]}")
+                    await asyncio.sleep(3)
+                    continue
 
-                async def heartbeat():
-                    while True:
-                        await asyncio.sleep(30)
-                        await ws.send(json.dumps(
-                            ["1", "hb", "phoenix", "heartbeat", {}]
-                        ))
+                data = res.json()
+                messages = data.get("data", [])
 
-                asyncio.create_task(heartbeat())
+                # Process newest-first, find where we left off
+                new_messages = []
+                for msg in messages:
+                    msg_id = msg.get("id")
+                    if msg_id == last_seen_id:
+                        break
+                    sender_type = msg.get("sender_type", "")
+                    content = msg.get("content", "")
+                    if content and sender_type.lower() == "agent":
+                        new_messages.append(msg)
 
-                async for raw in ws:
-                    try:
-                        data = json.loads(raw)
-                        event   = data[3] if len(data) > 3 else None
-                        payload = data[4] if len(data) > 4 else {}
+                # Forward in chronological order (reverse since API returns newest first)
+                for msg in reversed(new_messages):
+                    await on_message({
+                        "agent":   msg.get("sender_name") or "agent",
+                        "content": msg.get("content", ""),
+                        "timestamp": msg.get("inserted_at"),
+                    })
 
-                        if event == "message_created":
-                            # Payload is flat — fields are directly at root level
-                            sender_name = payload.get("sender_name") or ""
-                            sender_type = payload.get("sender_type", "")
-                            content     = payload.get("content", "")
-                            if content and sender_type == "agent":
-                                await on_message({
-                                    "agent":   sender_name,
-                                    "content": content,
-                                    "timestamp": payload.get("inserted_at"),
-                                })
-                    except Exception as e:
-                        logger.error(f"Band message parse error: {e}")
+                if messages:
+                    last_seen_id = messages[0].get("id")
 
         except Exception as e:
-            logger.warning(f"Band WS disconnected ({e}), reconnecting in 3s…")
-            await asyncio.sleep(3)
+            logger.warning(f"Band poll error: {e}")
+
+        await asyncio.sleep(2)
