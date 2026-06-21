@@ -1,4 +1,4 @@
-# CalGPT 🎸
+# CalGPT (Guitar Pedal Technology)🎸
 
 > Describe a guitar tone in plain language. Five AI agents research it, engineer it, critique it, and remember your preferences — all in real time.
 
