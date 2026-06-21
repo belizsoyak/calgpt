@@ -24,6 +24,7 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <math.h>
@@ -42,6 +43,12 @@
 
 static const char *WIFI_SSID = "your-ssid";
 static const char *WIFI_PASS = "your-password";
+
+// Backend setlist export URL the pedal pulls setlist.csv from.
+// Set LAPTOP_IP to your laptop's LAN IP (e.g. 192.168.1.42) — NOT localhost /
+// 127.0.0.1, which the ESP can't reach — and SETLIST_ID to the id returned by
+// POST /setlist. Used on boot and by POST /reload.
+#define EXPORT_URL "http://<LAPTOP_IP>:8000/setlist/<SETLIST_ID>/export.csv"
 
 // ---------------------------------------------------------------------------
 // ToneParams — ONE struct holds every effect parameter. Field names + order
@@ -264,6 +271,31 @@ bool loadSetlistCSV(const char *path) {
   return songCount > 0;
 }
 
+// Pull setlist.csv from the backend over WiFi and save it to LittleFS.
+// (Alternative to uploading it with the LittleFS Data Upload plugin.)
+bool fetchSetlistFromBackend(const char *url) {
+  HTTPClient http;
+  http.begin(url);
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("Setlist fetch: HTTP %d from %s\n", code, url);
+    http.end();
+    return false;
+  }
+
+  File f = LittleFS.open("/setlist.csv", "w");
+  if (!f) {
+    Serial.println("Setlist fetch: cannot open /setlist.csv for write");
+    http.end();
+    return false;
+  }
+  http.writeToStream(&f);   // stream the response body straight to flash
+  f.close();
+  http.end();
+  Serial.println("Setlist fetch: saved /setlist.csv");
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Footswitch: debounced GPIO button -> nextSong()
 // ---------------------------------------------------------------------------
@@ -318,6 +350,19 @@ void handle_params() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+// HTTP: POST /reload — re-pull setlist.csv from the backend, reload it, and
+// jump to the first song. Returns {"ok":<bool>,"songs":<count>}.
+void handle_reload() {
+  bool ok = fetchSetlistFromBackend(EXPORT_URL);
+  if (ok) {
+    loadSetlistCSV("/setlist.csv");
+    applySong(0);
+  }
+  String body = String("{\"ok\":") + (ok ? "true" : "false") +
+                ",\"songs\":" + songCount + "}";
+  server.send(ok ? 200 : 502, "application/json", body);
+}
+
 // ---------------------------------------------------------------------------
 // Setup / loop
 // ---------------------------------------------------------------------------
@@ -339,10 +384,13 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   server.on("/params", HTTP_POST, handle_params);
+  server.on("/reload", HTTP_POST, handle_reload);
   server.begin();
 
-  // Load a setlist from flash if one is present; start on the first song.
+  // Mount flash, pull the latest setlist from the backend (no-op if EXPORT_URL
+  // is unset/unreachable), then load whatever is on flash and start on song 0.
   LittleFS.begin(true);
+  fetchSetlistFromBackend(EXPORT_URL);
   if (loadSetlistCSV("/setlist.csv")) applySong(0);
 }
 
